@@ -1,305 +1,141 @@
-# Action Recommend — 회의 액션아이템 자동 추출 PoC
+# 🎬 Action Recommend — 회의 액션아이템 자동 추출 PoC
 
-모비데이즈 AI Tech Lab 사전과제.  
-회의 transcript → 액션아이템 자동 추출 → 분석 대시보드까지 이어지는 end-to-end 파이프라인.
+모비데이즈 AI Tech Lab 사전과제 제출물입니다.  
+회의 transcript 분석 → 액션아이템 자동 추출 및 검증 → 분석 대시보드 및 Slack 알림까지 이어지는 **End-to-End 데이터·AI 파이프라인**을 구축했습니다.
+
+> [!IMPORTANT]
+> **핵심 설계 철학 (Core Engineering Philosophies)**
+> 1. **비용보다 리스크 우선 (Risk over Cost)**: 단순 회의록 정리 시간 단축보다 **액션아이템 누락 차단(리스크 해결)**을 최우선 목표로 둡니다. 흐릿하게 결정된 안건을 임의로 폐기하거나 환각으로 채우는 대신 `is_ambiguous=TRUE` 플래그 및 `assignee=NULL` 형태로 보존하여 인간 검수 큐로 보내는 **명시적 Null 설계**를 구축했습니다.
+> 2. **2단 데이터 품질 보증망**: 신뢰성이 낮은 LLM 출력을 DB 적재 전 **Pydantic 스키마 검증 및 피드백 기반 3회 재시도-폴백** 단계에서 1차로 필터링하고, 적재 후 **dbt-core + dbt-utils 데이터 정합성 테스트**로 2차 검증하는 강력한 방어망을 구성했습니다.
+> 3. **철저한 멱등성(Idempotency) 보장**: 해시 기반 고유 식별자(`action_item_id`, `utterance_id`)를 강제하여 파이프라인을 몇 번이고 재실행해도 중복이나 깨짐이 없는 안전성을 보장합니다.
 
 ---
 
-## 기술 스택 및 선정 이유
+## 🛠️ 기술 스택 및 선정 이유
 
 | 영역 | 선택 | 선정 이유 |
 |---|---|---|
-| **Database** | PostgreSQL (Docker Compose) | 아래 비교표 참고. trade-off: Docker 셋업 비용이 있으나 MVCC 동시 쓰기·JSONB·upsert를 모두 지원하는 유일한 선택지. |
-| **Data Transformation** | dbt-core + dbt-utils | `ref()` 기반 자동 lineage와 `schema.yml` 선언 테스트를 제공. trade-off: PoC 규모에는 셋업 비용이 있으나 lineage 가시성·데이터 품질 테스트 확보로 정당화. |
-| **LLM** | Gemini API + Mock 토글 (`LLM_MODE`) | 실제 호출만 쓰면 재현성·레이트리밋 리스크 있음. Mock 고정 출력을 기본값으로 두어 멱등성을 보장. trade-off: 실제 호출 정확도 vs 재현성·비용의 균형을 환경변수 하나로 전환 가능하게 설계. |
-| **Validation** | Pydantic v2 | LLM 출력의 환각·포맷 붕괴를 적재 전에 차단. 재시도 후 실패 시 `confidence=0` 검수 큐. trade-off: 검증 강도를 높일수록 폴백 빈도가 늘어나므로 임계값은 실운영 데이터로 튜닝 필요. |
-| **STT** | Transcript JSON 직접 사용 (Transcriber 인터페이스) | 외부 API 유출 금지 원칙 + 시간 제약. trade-off: 실시간 STT를 포기하는 대신 `BaseTranscriber` 인터페이스로 Whisper/마이크 교체 비용을 최소화. |
-| **Dashboard** | Streamlit | Python 단일 스택 유지. 별도 BI 서버 없이 코드로 위젯·드릴다운 구성. trade-off: Metabase 대비 커스터마이징 자유도가 높지만 대규모 동시 접속에는 한계. |
+| **Database** | PostgreSQL (Docker Compose) | 사내 약 100명 사용 환경의 동시 쓰기 상황(액션아이템 상태 업데이트) 대응을 위해 MVCC 및 upsert를 지원하는 유일한 선택지. (SQLite/DuckDB 단점 극복) |
+| **Data Transformation** | dbt-core + dbt-utils | `ref()` 기반 자동 lineage 구조 제공 및 `schema.yml` 선언형 데이터 테스트를 통한 적재 후 2차 품질 보증 확보. |
+| **LLM** | Gemini API + Mock 토글 (`LLM_MODE`) | 멱등성과 무중단 검증을 위해 Mock 고정 출력을 기본값으로 보장하며, 환경변수 전환으로 무료 티어 Gemini 2.5 Flash 호출 실 PoC 가능. |
+| **Validation** | Pydantic v2 | LLM 출력의 포맷 붕괴 및 유효 한계값 이탈을 적재 전 단계에서 원천 차단. |
+| **STT / Audio** | 제공 JSON 사용 (WhisperX 연동) | 원천 데이터의 외부 SaaS 유출 금지 보안 원칙 준수. `BaseTranscriber` 추상 인터페이스를 도입해 추후 로컬 Whisper 모듈 교체 비용 최소화. |
+| **Dashboard** | Streamlit | Python 단일 스택을 유지하며 코드로 풍부한 위젯·드릴다운 화면을 빠르게 구성. |
 
-### Database 선정 근거 — SQLite vs DuckDB vs PostgreSQL
+### 📊 데이터베이스 비교 및 PostgreSQL 선택 근거
 
-**각 후보 비교**
-
-| 항목 | SQLite | DuckDB | PostgreSQL |
+| 항목 | SQLite | DuckDB | PostgreSQL (선택) |
 |---|---|---|---|
 | **아키텍처** | 파일 기반, 서버리스 | 파일 기반, 서버리스 | 클라이언트-서버 |
-| **주 용도** | 단일 앱 로컬 저장 | 분석(OLAP), 배치 집계 | 트랜잭션(OLTP) + 분석 혼합 |
-| **동시 쓰기** | WAL 모드에서도 단일 writer | 멀티 프로세스 동시 쓰기 미지원 | MVCC 기반 다중 동시 쓰기 지원 |
-| **Upsert 지원** | `INSERT OR REPLACE` (부분적) | `INSERT OR REPLACE` (부분적) | `ON CONFLICT DO UPDATE` (완전 지원) |
-| **JSONB 지원** | 미지원 (TEXT 저장) | JSON 지원 (인덱싱 제한) | JSONB 네이티브 지원 + 인덱싱 |
-| **Production 이관** | 별도 마이그레이션 필수 | 별도 마이그레이션 필수 | PoC → Production 동일 엔진 |
-| **설치 비용** | 없음 (Python 내장) | 없음 (pip 설치) | Docker Compose 필요 |
-
-**PostgreSQL을 선택한 이유**
-
-이 PoC의 도입 가정은 **사내 100명 동시 사용**이다. 핵심 시나리오는 여러 담당자가 동시에 자신의 액션아이템 `status`를 `open → done`으로 업데이트하는 상황인데, 이때 **동시 쓰기 충돌**이 발생한다.
-
-- **SQLite**: WAL 모드에서도 write는 직렬화된다. 동시 사용자가 늘수록 병목이 생기며, production 서버 환경에 사용하는 DB가 아니다.
-- **DuckDB**: OLAP(분석 집계)에 특화되어 읽기 성능은 탁월하지만, 멀티 프로세스 동시 쓰기를 공식 지원하지 않는다. 액션아이템 업데이트처럼 빈번한 단건 OLTP 쓰기에는 부적합하다.
-- **PostgreSQL**: MVCC(다중 버전 동시성 제어)로 동시 쓰기를 안전하게 처리한다. `ON CONFLICT (action_item_id) DO UPDATE` 구문으로 파이프라인 재실행 시 멱등성을 선언적으로 확보할 수 있고, `decisions` 필드를 JSONB로 네이티브 저장·인덱싱할 수 있다. 무엇보다 **PoC와 production 타깃 엔진을 일치**시킴으로써, 추후 실제 도입 시 마이그레이션 리스크가 없다.
-
-> Docker Compose 셋업 비용이 유일한 단점이나, 단일 컨테이너로 구성해 이를 최소화했다.
+| **동시 쓰기** | WAL 모드에서도 단일 writer (병목) | 멀티 프로세스 동시 쓰기 미지원 | **MVCC 기반 다중 동시 쓰기 완벽 지원** |
+| **Upsert 지원** | 제한적 (`INSERT OR REPLACE`) | 제한적 (`INSERT OR REPLACE`) | **`ON CONFLICT DO UPDATE` 완전 지원** |
+| **JSONB 지원** | 미지원 (TEXT 적재) | JSON 지원 (인덱싱 제한) | **JSONB 네이티브 지원 및 인덱싱** |
+| **선정이유** | 사내 100명 다중 동시 트래킹 환경에서 SQLite/DuckDB는 쓰기 락 충돌 우려가 큼. **Postgres**는 MVCC 기반 동시성 제어 및 강력한 upsert를 지원하여 PoC 단계와 향후 실 운영 환경의 데이터 마이그레이션 장벽을 없애는 최적의 선택지입니다. |
 
 ---
 
-## 아키텍처 흐름
+## 🌐 아키텍처 및 데이터 흐름
 
 ```
 [입력 소스]
-  FileTranscriber (JSON)          ← 현재 지원 (구 포맷 / 신 포맷 자동 감지)
-  WhisperTranscriber (mp3)        ← Step 2 예정
-  MicTranscriber (마이크 실시간)   ← Step 3 예정
-        ↓ Meeting 객체
-  → ① ingest.py          raw_utterances (Postgres, 불변)
-  → ② dbt staging        stg_utterances (화자 정규화, 잡음 제거)
-  → ③ extract.py + LLM   action_items_raw / raw_minutes (pydantic 검증 + upsert)
-  → ④ dbt marts + test   mart_action_items / mart_minutes
-  → ⑤ Streamlit          대시보드 (위젯 4종) / Slack JSON 페이로드
+  - FileTranscriber (JSON 구/신 포맷 감지)    ← 기본 검증 경로
+  - WhisperTranscriber (mp3/wav)             ← 가산점 경로 (WhisperX STT + pyannote)
+        ↓ Meeting 객체화 (화자 이름 보정 적용)
+  → ① ingest.py          raw_meetings / raw_utterances (Postgres 무가공 적재)
+  → ② dbt staging        stg_utterances (화자 직급 정규화, 잡음 발화 및 중복 제거)
+  → ③ extract.py + LLM   action_items_raw / raw_minutes (pydantic 적재 전 검증 + 3회 재시도)
+  → ④ dbt marts + test   mart_action_items / mart_minutes (비정규화 마트 생성 + dbt test 16개 검증)
+  → ⑤ Streamlit          대시보드 시각화 / Slack Incoming Webhook (Block Kit 페이로드 전송)
 ```
 
-- **Python**: 추출·적재(EL) + LLM 로직
-- **dbt**: SQL 변환(T) + 데이터 품질 테스트
-- **Transcriber 인터페이스**: 입력 소스를 파이프라인과 분리 — JSON·음성파일·마이크를 동일한 `Meeting` 객체로 추상화
-
-**모듈 분리 기준**: 외부 API 호출·비즈니스 로직(LLM 추출·pydantic 검증)은 Python, SQL 변환·데이터 품질 검증은 dbt로 책임을 분리. Python이 "무엇을 추출할지"를 결정하고, dbt가 "추출된 데이터가 올바른지"를 보증한다.
+**모듈 책임 분리 기준**: API 호출 및 파싱, LLM 비즈니스 로직(AI 추출 및 Pydantic 1차 검증)은 **Python**이 담당하고, 정형 데이터 변환 및 데이터셋 결합, 최종 품질 검증(dbt test)은 **dbt**가 책임집니다. "Python이 무엇을 추출할지 결정하고, dbt가 추출된 데이터의 결함 여부를 보증"합니다.
 
 ---
 
-## 디렉토리 구조
+## 📂 디렉토리 구조
 
 ```
 Action_recommend/
-├── Makefile                    # 파이프라인 전체 실행 오케스트레이터
-├── README.md
-├── AI_USAGE.md                 # AI 도구 활용 내역
-├── docker-compose.yml          # PostgreSQL 컨테이너 구성 (env 변수 기반)
-├── requirements.txt            # 기본 의존성 (requests, pytest 포함)
-├── requirements-whisperx.txt   # WhisperX 선택 설치
+├── Makefile                    # 파이프라인 setup, run, test, dashboard 일괄 제어 오케스트레이터
+├── README.md                   # 시스템 및 프롬프트 설계 사상 안내서
+├── AI_USAGE.md                 # AI 협업 내역 및 지원자 직접 개입 판단 사례서
+├── docker-compose.yml          # PostgreSQL 환경 구성 (.env 보안 변수 바인딩)
+├── requirements.txt            # 기본 코어 의존성 (requests, pytest 포함)
+├── requirements-whisperx.txt   # WhisperX STT 확장 설치 전용 의존성
 ├── tests/
-│   └── test_extract_validation.py  # LLM 신뢰화 핵심 로직 unit test (10개)
-├── data/
-│   └── sample_meeting.json     # 광고 미디어 도메인 샘플 회의 (16발화, 구 포맷)
+│   └── test_extract_validation.py  # LLM 신뢰화 핵심 로직 유효성 단위 테스트 (10개)
 ├── src/
-│   ├── config.py               # 환경 변수, DB URI, LLM_MODE, Slack Webhook 관리
-│   ├── database.py             # DDL 초기화 (raw 테이블 4종)
-│   ├── transcriber.py          # BaseTranscriber + FileTranscriber + WhisperTranscriber
-│   ├── ingest.py               # EL: transcript → raw_utterances
-│   └── extract.py              # LLM 추출 + pydantic 검증 → action_items_raw / raw_minutes
+│   ├── config.py               # 환경 변수, DB URI, LLM_MODE 관리
+│   ├── database.py             # raw DDL 초기화 및 커넥션 풀링
+│   ├── transcriber.py          # 구/신 JSON 로더 및 WhisperX STT 어댑터
+│   ├── ingest.py               # 원천 데이터 적재 및 멱등 해시 생성
+│   └── extract.py              # LLM 추출, 3회 재시도-폴백 루프 및 Pydantic 바인딩
 ├── dbt_project/
-│   ├── dbt_project.yml
-│   ├── packages.yml            # dbt-utils 의존성
-│   ├── profiles.yml            # DB 연결 프로필 (.gitignore 차단)
+│   ├── dbt_project.yml         # dbt 프로젝트 설정
+│   ├── profiles.example.yml    # env_var 기반 안전 프로필 양식
 │   └── models/
-│       ├── staging/
-│       │   ├── schema.yml
-│       │   └── stg_utterances.sql
-│       └── marts/
-│           ├── schema.yml      # dbt-utils accepted_range 테스트 포함
-│           ├── mart_action_items.sql
-│           └── mart_minutes.sql
+│       ├── staging/            # 화자 정규화, 5글자 이하 단독 잡음 및 중복 제거 레이어
+│       └── marts/              # 비정규화 조인 마트 및 dbt-utils 범위 테스트 레이어
 └── app/
-    └── dashboard.py            # Streamlit 대시보드 (위젯 4종 + Slack 사이드바)
+    └── dashboard.py            # Streamlit 대시보드 (위젯 4종 + Slack 전송 사이드바)
 ```
 
 ---
 
-## 실행 방법
+## 🚀 실행 방법
 
-### 사전 준비
+### 1. 사전 준비 (설정 구축)
 
 ```bash
-# 1. 환경변수 설정
-cp .env.example .env          # POSTGRES_USER, POSTGRES_PASSWORD, GEMINI_API_KEY 입력
+# 환경 변수 복사 및 필수 설정 정보(GEMINI_API_KEY 등) 기입
+cp .env.example .env
+
+# dbt 보안 접속 프로필 템플릿 복사
 cp dbt_project/profiles.example.yml dbt_project/profiles.yml
 
-# 2. Postgres 컨테이너 실행 + 패키지 설치
+# Postgres 컨테이너 기동 + 패키지 설치 + dbt packages(dbt-utils) 종속성 일괄 다운로드
 make setup
 ```
 
-### 파이프라인 실행
+### 2. 파이프라인 통합 데모 실행
 
 ```bash
-# 파이프라인 실행 + 대시보드 자동 시작 (권장)
-make demo
-
-# 개별 실행
-make run        # DB초기화 → ingest → dbt staging → extract → dbt marts
-make test       # dbt test 16개
-make dashboard  # Streamlit 대시보드만 실행
-```
-
-### LLM 실제 호출 (Gemini 2.5 Flash)
-
-`.env` 파일에 `LLM_MODE=real`, `GEMINI_API_KEY`를 설정한 뒤:
-
-```bash
+# 전체 파이프라인(ingest → dbt staging → extract → dbt marts)을 일괄 실행하고 대시보드를 즉시 가동합니다.
 make demo
 ```
 
-### Slack 실제 전송
-
-`.env` 파일에 `SLACK_WEBHOOK_URL`을 추가하면 대시보드 사이드바에 **"Slack으로 전송"** 버튼이 활성화됩니다.
-
-```
-SLACK_WEBHOOK_URL=https://hooks.slack.com/services/...
-```
-
-버튼 클릭 시 미완료(open) 액션아이템 전체가 Slack Block Kit 형식으로 지정 채널에 전송됩니다.
-
-### 음성 파일 STT (WhisperX — 가산점 경로)
-
-```bash
-# 1. WhisperX 패키지 설치
-pip install -r requirements-whisperx.txt
-
-# 2. HuggingFace 모델 라이선스 동의 (각 URL에서 "Agree" 클릭)
-#    https://huggingface.co/pyannote/speaker-diarization-community-1
-#    https://huggingface.co/pyannote/segmentation-3.0
-
-# 3. .env에 토큰 추가
-#    HUGGINGFACE_TOKEN=hf_xxxx
-
-# 4. 대시보드 실행 후 사이드바에서 mp3/wav 파일 업로드
-make dashboard
-```
-
-업로드 후 WhisperX가 자동으로 STT + 화자 분리(SPEAKER_00/01/02...)를 수행하며,
-대시보드에서 화자 이름을 직접 입력한 뒤 파이프라인을 실행할 수 있습니다.
+*   **개별 제어 스크립트**:
+    *   `make run`: 전체 ETL 데이터 파이프라인 순차 구동 및 동기화.
+    *   `make test`: 16개의 dbt 데이터 품질 및 무결성 테스트 동작.
+    *   `make test-unit`: Pydantic 및 재시도-폴백 로직 유효성 단위 테스트 10개 구동.
+    *   `make dashboard`: Streamlit 대시보드 웹 구동.
 
 ---
 
-## 대시보드 구성
+## 🎯 프롬프트 설계 철학 및 엔지니어링 근거
 
-**메인 화면 (위젯 4종 + 요약)**
+`src/extract.py`에 구현된 프롬프트는 단순 지시를 넘어 **비결정적인 LLM 출력을 결정적인 정형 데이터로 변환**하기 위해 3대 원칙 하에 설계되었습니다.
 
-| # | 섹션 | 내용 |
-|---|---|---|
-| - | 상태 요약 | 전체 / Open / Done / Blocked 메트릭 카드 |
-| 1 | **회의·액션아이템 발생 추이** | 날짜별 액션아이템 건수 바차트 |
-| 2 | **담당자별 미완료 Top 5** | status=open 필터 + 담당자별 건수 내림차순 바차트 |
-| 3 | **캠페인/광고주별 반복 이슈 키워드** | BoW 방식 키워드 빈도 바차트 (회의별) |
-| 4 | **LLM 신뢰도 분포 + 드릴다운** | confidence 히스토그램 + 저신뢰도 항목 테이블 |
-| - | **주요 의사결정** | 회의별 요약 + 결정사항 expander |
-
-**사이드바**
-
-| 섹션 | 내용 |
-|---|---|
-| **새 회의 업로드** | JSON 업로드 → 화자 이름 수정 → 파이프라인 실행 버튼 |
-| **Slack 알림 페이로드** | 미완료 항목 JSON 미리보기 + 다운로드 + 실제 Slack 전송 |
-
-업로드 흐름:
-```
-JSON 파일 업로드
-  → 발화자 자동 감지 (이름 수정 가능)
-  → 파이프라인 실행 버튼
-  → st.status() 5단계 진행 표시
-     ① DB 초기화 → ② ingest → ③ dbt staging → ④ LLM 추출 → ⑤ dbt marts
-  → 결과 화면 자동 갱신
-```
+1. **도메인 컨텍스트 주입 (`_DOMAIN_CONTEXT`)**
+   * SA, DA, ROAS, CPM 등 광고 마케팅 약어 사전을 주입하여 LLM이 도메인 약어를 잡음으로 오해해 환각을 내는 현상을 예방했습니다.
+2. **암묵적 R&R의 안전한 구조화 (`_NOISE_INSTRUCTIONS` & `_FEW_SHOT`)**
+   * "그건 제가 챙길게요"처럼 한국어 회의 특유의 R&R 핑퐁 상황을 해결하기 위해 **[최종 명시적 확인 발화자]**를 assignee로 매핑하게 학습시켰습니다.
+   * **(핵심 철학)**: 담당자가 모호할 경우 억지로 가짜 담당자를 조작하는 대신 `assignee=NULL` 및 `is_ambiguous=TRUE`로 보존하여 대시보드 검수 테이블로 모이게 설계했습니다.
+3. **Pydantic 2단 방어 및 3회 피드백 재시도**
+   * 타입, confidence 범위, 소스 발화 누락을 Pydantic Schema로 실시간 감시하며 에러 발생 시 `error_hint`를 동봉해 최대 3회 재시도를 요청합니다.
+   * 최종 실패 시에도 유실 방지를 위해 `confidence=0.0`, `is_ambiguous=TRUE`를 달아 검수 테이블로 안전하게 폴백(Fallback) 적재합니다.
 
 ---
 
-## 설계 원칙
+## 📈 검증 완료 내역
 
-1. **LLM 출력을 신뢰 가능한 자산으로** — structured output + pydantic 검증 + `confidence` / `source_utterance_id` / `is_ambiguous` 3개 필드로 추출 근거를 데이터에 동봉
-2. **모든 단계가 재실행에 안전** — 해시 기반 ID + `ON CONFLICT` upsert로 멱등성 확보
-3. **원천 데이터는 외부로 나가지 않음** — STT 포함 모든 처리가 로컬 경계 안에서 완결
-
----
-
-## 프롬프트 설계 근거
-
-`src/extract.py`의 `_build_action_items_prompt()` 구현 기반.
-
-### 도메인 컨텍스트 주입 (`_DOMAIN_CONTEXT`)
-SA·DA·CPM·ROAS·A/B 테스트·CTA·소재·세팅 등 광고 마케팅 약어 사전을 프롬프트에 직접 주입. LLM이 도메인 용어를 일반 의미로 오해하는 환각을 사전 차단.
-
-### 잡음 처리 지침 (`_NOISE_INSTRUCTIONS`)
-- "알겠습니다", "네, 맞습니다" 등 단순 수긍 발화는 액션아이템 제외
-- R&R 핑퐁 구간에서는 **최종 명시적 확인 발화**를 assignee 근거로 사용
-- 담당자 불명확 시 추측 금지 → `assignee=null + is_ambiguous=true` 강제
-- 기한 미명시 시 → `due_date=null`, 상대 표현("이번 주") → `due_is_inferred=true`
-
-### few-shot 예시 (`_FEW_SHOT`)
-R&R이 3인 대화에서 핑퐁되다가 C가 최종 확인하는 예시를 제공.  
-`assignee=C`, `source_quote=C의 발화`로 추출하는 패턴을 LLM에 학습시킴.
-
-### 스키마 강제 + 검증·재시도
-1. pydantic `ActionItemSchema`로 LLM 출력 검증 (confidence 범위, 필수 필드)
-2. 스키마 위반 시 `error_hint`를 프롬프트에 포함해 최대 3회 재시도
-3. 최종 실패 시 `confidence=0 + is_ambiguous=true` 항목으로 검수 큐에 보존 (누락 방지)
+*   **dbt 데이터 품질 테스트**: `make test` 구동 시 stg_utterances, mart_action_items, mart_minutes의 무결성 테스트 **16/16 PASS**.
+*   **LLM 신뢰화 단위 테스트**: `make test-unit` 구동 시 Pydantic 경계값, nullability 보존, 3회 시도 실패 시 강제 폴백 및 2회차 성공 조기 차단 등 **10/10 PASS**.
 
 ---
 
-## 가정 사항
+## 💡 가정 사항 (Assumptions)
 
-- **STT 대체**: 외부 SaaS API로 원천 데이터 전송이 금지되어 제공 transcript JSON을 그대로 사용. `BaseTranscriber` 인터페이스로 추후 로컬 Whisper 교체 비용 최소화.
-- **단일 회의 PoC**: 주차별 추이·반복 키워드 위젯은 현재 1건 데이터라 단조롭지만, 다회의 적재 시 즉시 의미 있는 차트로 동작하는 구조로 설계.
-- **멱등성**: `hash(meeting_id + normalize(content))` 기반 PK + `ON CONFLICT DO UPDATE` — 파이프라인 재실행 시 중복 적재 없음. mock 모드는 고정 content로 완전 보장. real 모드에서 LLM이 동일 발화를 다르게 표현하면 중복 삽입 가능 — 안정적 키로는 `source_utterance_id` 기반 설계가 대안이나 PoC 범위에서는 현재 방식으로 충분하다고 판단.
-- **LLM_MODE=mock 기본값**: `GEMINI_API_KEY` 없이도 전체 파이프라인 동작. `LLM_MODE=real` 설정 시 Gemini 2.5 Flash 실제 호출.
-- **화자 역할 정보**: 현재 파이프라인은 화자 이름만 사용. 역할(팀장/마케터 등)은 프롬프트 도메인 컨텍스트로 처리하며, DB 스키마 확장 없이 대응 가능.
-
----
-
-## 입력 포맷 지원
-
-`FileTranscriber`는 두 가지 JSON 포맷을 자동 감지합니다.
-
-**구 포맷** (`utterances` 키 기반)
-```json
-{
-  "meeting_id": "meet_001",
-  "title": "주간 미디어 운영 회의",
-  "date": "2026-06-01",
-  "participants": ["홍길동", "김민지"],
-  "utterances": [
-    {"speaker": "홍길동", "content": "...", "timestamp": "2026-06-01T10:00:00Z"}
-  ]
-}
-```
-
-**신 포맷** (`segments` 키 기반 — STT 출력 형식)
-```json
-{
-  "language": "ko",
-  "speakers": [{"name": "수아", "role": "퍼포먼스 마케터"}],
-  "segments": [
-    {"id": 1, "line_no": 1, "speaker": "수아", "role": "...", "text": "..."}
-  ]
-}
-```
-
-신 포맷은 `meeting_id`를 파일명 해시로 자동 생성합니다.
-
----
-
-## 향후 확장 로드맵 (STT)
-
-```
-Step 1  ✅ FileTranscriber — JSON 파일 (구/신 포맷 자동 감지)
-Step 2  ✅ WhisperTranscriber — mp3/wav 음성 파일 → WhisperX STT + 화자 분리
-Step 3  🔲 MicTranscriber — 마이크 실시간 녹음 → Whisper → 파이프라인
-```
-
-`BaseTranscriber` 인터페이스를 구현하면 새 입력 소스를 추가해도 파이프라인 코드는 변경 불필요.
-
----
-
-## 검증 결과
-
-`make run` + `make test` 전체 실행 결과:
-
-```bash
-# dbt 데이터 품질 테스트
-make test
-# → 16/16 PASS (stg_utterances 4개, mart_action_items 6개, mart_minutes 3개, sources 3개)
-
-# LLM 신뢰화 unit test
-make test-unit
-# → 10/10 PASS
-#   - pydantic confidence 범위 검증 (boundary, 반올림)
-#   - assignee=None / is_ambiguous 보존 확인
-#   - 3회 재시도 후 confidence=0 폴백 경로 검증
-#   - 재시도 2회차 성공 시 정상 반환 검증
-```
+*   **STT 대체 경로**: 외부 SaaS로 음성 유출이 금지된 보안 원칙을 완벽히 방어하고자, GUI에서 업로드된 음성은 로컬 내에서 WhisperX를 이용해 전 처리됩니다.
+*   **Real 모드 멱등성 한계**: mock 모드는 완전한 멱등성을 보장하나, real 모드에서 LLM이 동일 발화를 다르게 파싱할 경우 중복이 생길 수 있음을 인지하고 있습니다. 실 환경에서는 `source_utterance_id` 기준의 DB unique 제약조건 고도화를 대안으로 고려하고 있으며 PoC 한계로 이를 README에 기재했습니다.
+*   **단일 회의 한계**: 현재 PoC는 1건 회의 기준으로 기동되지만, 데이터 아키텍처는 다중 회의 적재 시 주차별 추이 및 빈도 분석 차트가 즉각 반응하도록 모델링을 확장 완료했습니다.

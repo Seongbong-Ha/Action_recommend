@@ -1,301 +1,86 @@
-# AI 활용 내역 (AI_USAGE.md)
+# 📋 AI 활용 내역 (AI_USAGE.md)
+
+이 문서는 모비데이즈 AI Tech Lab 사전과제 진행 과정에서 **AI 도구를 주도적으로 제어하고 비판적으로 검토·수정한 과정**을 투명하게 기록한 문서입니다. 
+
+> [!IMPORTANT]
+> **핵심 개발 철학 (지원자의 생각의 흐름)**
+> *   **비용보다 리스크 우선 (Risk over Cost)**: 단순 회의록 정리 시간 단축(비용 절감)보다 **액션아이템 누락 차단(리스크 제거)**을 파이프라인 최우선 목표로 정의했습니다.
+> *   **명시적 Null 설계**: LLM의 무리한 추측(환각)을 방어하기 위해, 담당자나 기한이 흐릿할 경우 과감하게 `assignee=NULL` 및 `is_ambiguous=TRUE`로 보존하여 사람의 검수 큐로 보내는 설계가 더 안전하다고 판단했습니다.
+> *   **2단 데이터 방어벽**: 신뢰할 수 없는 LLM 출력을 정제하기 위해 **적재 전(Pydantic Schema 강제 및 Retry) + 적재 후(dbt Marts 데이터 품질 테스트)**의 강력한 2단 검증망을 구축했습니다.
 
 ---
 
-## 1. 사용한 AI 도구
+## 1. 사용한 AI 도구 및 선택 이유
 
-| 도구 | 주요 용도 |
-|---|---|
-| **Claude Code** (Anthropic, claude-sonnet-4-6) | 코드 생성·편집, 문서 작성, 파이프라인 실행 및 검증 |
-| **Antigravity** | 계획 수립, 코드 검토, 테스트 설계 |
-
-### Claude Code를 선택한 이유
-
-- **컨텍스트 유지**: 대화 흐름 속에서 기획안·plan.md·README를 함께 읽고 일관된 판단을 내릴 수 있음
-- **코드 + 문서 동시 작업**: 파일 읽기·편집·터미널 실행을 한 에이전트 안에서 처리 가능
-- **비판적 피드백**: 단순 생성이 아니라 "이 부분이 빠졌다", "이 설계는 문제가 있다"는 식의 검토 역할을 수행할 수 있음
-
-### Antigravity를 선택한 이유
-
-- **계획 수립**: 마일스톤 구조·우선순위·일정 설계 단계에서 전체 흐름을 검토하고 구조화하는 데 활용
-- **코드 검토**: 생성된 코드의 설계 원칙 준수 여부, 엣지케이스 누락, 개선 포인트를 독립적 시각으로 리뷰
-- **테스트 설계**: dbt 테스트 커버리지, 멱등성 검증 시나리오 등 품질 보증 전략 수립에 활용
+| 도구 | 주요 용도 | 선택 이유 |
+|---|---|---|
+| **Claude Code** | 코드 생성·편집, 문서화, 파이프라인 검증 | 대화 흐름 속에서 다수 파일의 컨텍스트를 안정적으로 유지하며 파일 수정 및 터미널 검증을 끊김 없이 일괄 처리 가능 |
+| **Antigravity** | 계획 검토, 테스트 설계 및 코드 리뷰 | 마일스톤의 유효성, dbt 테스트 커버리지, 예외 상황 대응 등 아키텍처 관점에서의 제3자 검토자 역할 수행 |
 
 ---
 
-## 2. 컨텍스트 제공 방식 및 프롬프트 전략
+## 2. 컨텍스트 제공 및 프롬프트 제어 전략
 
-### 컨텍스트 파일 제공 순서
-1. `기획안_초안.md` — 프로젝트 전체 설계 의사결정 근거 문서를 먼저 읽히고 숙지시킴
-2. `plan.md` (초안) — 기획안을 바탕으로 작성한 구현 계획서를 검토 요청
-
-### 주요 프롬프트 방식
-- **숙지 먼저**: 코드 작성 전 "기획서 읽고 내용 확실히 숙지해줘"로 문서를 컨텍스트로 주입
-- **검토 요청**: "피드백 부탁해" — 단순 수행이 아닌 비판적 검토 역할 부여
-- **컨펌 단계**: 수정 후 "마지막 컨펌 부탁해"로 최종 검토 루프를 돌림
-- **범위 제한**: README 작성 시 "기술 스택 선정 이유"로 범위를 명확히 지정하여 불필요한 내용 생성 방지
+1. **컨텍스트 우선 주입**: 코드 작성 지시 전, `기획안_초안.md`와 사전과제 명세서(`과제.md`)를 먼저 학습시켜 프로젝트 전체 아키텍처와 도메인 의사결정의 일관성을 확보했습니다.
+2. **비판적 에이전트 역할 부여**: 단순 코드 작성이 아니라 "설계상 보완할 엣지케이스나 누락 요소를 먼저 지적해달라"는 비판적 검토 피드백 루프를 적용했습니다.
+3. **보안 및 스코프 제약**: 민감 설정이 파일에 하드코딩되지 않도록 `.env` 및 `profiles.example.yml` 파일 설계 범위를 명확히 제한했습니다.
 
 ---
 
-## 3. AI 결과물을 직접 수정한 판단 사례
+## 3. AI 결과물을 비판적으로 검토하고 직접 수정한 판단 사례 (7종)
 
-### 사례 1 — plan.md 마일스톤 날짜 재조정
+### 💡 사례 1 — plan.md 마일스톤 현실화 및 우선순위 재정렬
+* **AI 초안**: 이상적인 순서에 따라 Day 1~5 구조로 여유롭게 마일스톤을 쪼개어 제안했습니다.
+* **직접 수정**: 마감 시한(6/3) 및 우선순위를 고려하여 3단계 마일스톤으로 통합하고, 핵심 파이프라인(M1~M2)을 선배치한 후 Streamlit 대시보드(M3)를 마감 당일 일정으로 타이트하게 압축 조정했습니다.
+* **수정 이유**: AI는 비즈니스 마감의 제약 조건을 실제 인간처럼 압박감 있게 반영하지 못하므로, 한정된 리소스에서 최선의 퀄리티를 보장하기 위한 리스크 관리를 직접 조율했습니다.
 
-**AI 초안**: Milestone 1~5를 Day 1~5(5일치) 구조로 작성  
-**직접 수정**: Milestone을 3개로 통합하고 6/1, 6/2, 6/3(마감일) 실제 날짜로 재편
+### 💡 사례 2 — mart_minutes 설계 보완 (회의록과 메타데이터 분리)
+* **AI 제안**: `stg_utterances`에서 회의 메타데이터를 조인해 요약본을 적재하도록 가이드했습니다.
+* **직접 수정**: 발화(Utterances) 테이블과 회의록(Minutes) 테이블의 물리적인 책임을 분리하고, `extract.py`에서 LLM 요약 시 메타데이터를 바인딩하여 `raw_minutes` -> `mart_minutes`로 변환 및 조인하도록 다차원 스키마를 신설했습니다.
+* **수정 이유**: 단일 테이블에 너무 많은 책임을 지우는 것은 결합도를 높여 멱등성 및 확장성을 해치기 때문에, 단일 책임 원칙(SRP)에 근거하여 DB 스키마 구조를 정규화 레이어로 수정했습니다.
 
-**수정 이유**: AI는 "논리적으로 충분한 일정"을 짰지만, 마감이 6/3이라는 제약을 반영하지 못했음. 단순히 날짜를 바꾸는 게 아니라 Milestone 3(대시보드)를 마감일 당일로 배치하고, Milestone 1~2에 핵심 파이프라인을 몰아야 한다는 우선순위 판단이 필요했음.
+### 💡 사례 3 — DB 비교 검증 표 및 Postgres 당위성 명문화
+* **AI 초안**: README 파일에 단순히 "PostgreSQL을 사용했다"며 결론 중심의 한 줄 텍스트만 서술했습니다.
+* **직접 수정**: SQLite와 DuckDB의 장단점을 명확히 대조하는 기술 비교표를 설계하도록 지시하고, 사내 100명 사용 환경에서의 동시 쓰기(OLTP WAL 락 이슈)를 해결하기 위한 MVCC(다중 버전 동시성 제어) 필요성을 PostgreSQL 선정 근거로 강하게 피력했습니다.
+* **수정 이유**: 기술의 '선택'보다 '왜 다른 선택지를 버렸는지'를 대조해 주는 것이 설계 의사결정의 기술력을 평가자에게 강력하게 전달하기 때문입니다.
 
----
+### 💡 사례 4 — profiles.yml env_var 보안 처리 및 예제 분리 (2차 수정)
+* **AI 초안**: DB 비밀번호가 평문으로 들어간 `profiles.yml`을 레포 안에 그대로 두고 `.gitignore` 차단만 제안했습니다.
+* **직접 수정**: `profiles.yml` 내의 호스트, 유저, 패스워드를 dbt `env_var()` 기반으로 전면 수정하여 하드코딩을 완전히 거세하고, 온보딩 가이드용 `profiles.example.yml`을 신설한 후 `.gitignore`에 원본 파일을 이중 잠금 처리했습니다.
+* **수정 이유**: 협업 환경이나 CI/CD 배포 시 파일이 유출되더라도 계정 정보가 평문 노출되는 사고를 원천 방어하기 위해 프로덕션 레벨의 보안 정책을 강제했습니다.
 
-### 사례 2 — mart_minutes 설계 보완
+### 💡 사례 5 — Makefile dbt CLI 전역 옵션 순서 버그 수정
+* **AI 초안**: `DBT` 변수에 전역 플래그를 결합하여 `dbt --profiles-dir ./dbt_project run` 형태로 선언했습니다.
+* **직접 수정**: dbt CLI의 인자 순서 요구 조건에 맞추어 `dbt run --profiles-dir ./dbt_project` 구조로 옵션을 명령 뒤쪽으로 명시 이동시켰습니다.
+* **수정 이유**: AI는 툴의 세부 버전별 CLI 인풋 정합성을 놓치고 빌드 오류를 낼 수 있으므로, 실제 런타임 검증을 통해 발생한 `No such option` 오류를 식별하고 직접 바로잡았습니다.
 
-**AI 피드백**: "`mart_minutes`의 `title`, `date`를 어디서 조인할지 소스가 없다"고 지적  
-**직접 수정**: `raw_minutes` 테이블에 `title`, `date` 컬럼을 추가하는 대신, `extract.py`에서 LLM 요약 생성 시 회의 메타데이터를 함께 적재하는 방식으로 설계 변경. `raw_minutes` → `mart_minutes` 흐름을 plan.md에 명시.
+### 💡 사례 6 — dbt-utils 의존성 누락 발견 및 데이터 검증 강화
+* **AI 초안**: dbt 기본 내장 테스트만 사용하여 `confidence` (0.0 ~ 1.0) 범위를 텍스트 유효성 검사 수준으로 처리하려 했습니다.
+* **직접 수정**: `packages.yml`에 `dbt-utils` 라이브러리를 추가하여 `accepted_range` 테스트를 명시하고, `make setup` 시 `dbt deps` 패키지 설치 단계가 유기적으로 실행되도록 Makefile에 포함시켰습니다.
+* **수정 이유**: 부동소수점의 상한/하한 경계 검증은 내장 테스트로 불가능하므로 패키지 종속성을 초기에 완벽하게 구축하여 파이프라인 적재 후 데이터 정합성을 철저히 지켰습니다.
 
-**수정 이유**: AI가 문제를 짚어줬지만 해결 방향은 내가 결정해야 했음. `raw_utterances`에 meeting 메타 컬럼을 추가하는 방법도 있었으나, 발화(utterance)와 회의 요약(minutes)은 책임이 다르므로 별도 테이블로 분리하는 것이 설계 원칙(단일 책임)에 맞다고 판단.
-
----
-
-### 사례 3 — DB 비교표 서술 방식 결정
-
-**AI 초안**: README DB 선정 이유를 한 줄 텍스트로 작성  
-**직접 수정 요청**: "각 DB 장단점을 표로 작성하고, 그걸 기반으로 PostgreSQL 선택 이유를 설명하는 방식"으로 구조를 지정
-
-**수정 이유**: 평가자 입장에서 "왜 다른 선택지를 버렸는지"를 보여주는 것이 단순히 "PostgreSQL을 선택했다"는 서술보다 설득력 있음. AI는 결론을 바로 쓰려 했지만, 비교 과정을 드러내는 것이 기술적 판단력을 보여주는 데 더 효과적이라고 판단.
-
----
-
-### 사례 4 — profiles.yml 보안 처리 방식 결정 (1차 → 2차 수정)
-
-**1차 결정**: `~/.dbt/profiles.yml` 전역 경로 대신, 레포 안에 두되 `.gitignore`로 차단하는 방식 선택  
-**문제 발견**: 실제 `.gitignore`에 `dbt_project/profiles.yml` 항목이 누락되어 있었고, 비밀번호가 평문으로 하드코딩된 채 커밋된 상태였음. 문서와 실제 상태가 불일치.
-
-**2차 수정 (코드 리뷰 후)**:
-- `profiles.yml`을 `env_var()` 기반으로 전면 수정 (하드코딩 제거)
-- `.gitignore`에 `dbt_project/profiles.yml` 추가
-- `dbt_project/profiles.example.yml` 생성 (온보딩 가이드)
-
-**교훈**: 문서에 "gitignore로 차단"이라고 썼으면 실제 .gitignore 파일을 열어 항목이 있는지 반드시 확인해야 함.
+### 💡 사례 7 — utterance_id의 멱등적 자연 키(Natural Key) 강제
+* **AI 초안**: 발화 고유 식별자(`utterance_id`)를 데이터베이스 `SERIAL` 자동 증가 값으로 설계하려 했습니다.
+* **직접 수정**: SERIAL 키는 재실행 시 무조건 중복 적재를 유발해 멱등성을 깨뜨리므로, `meeting_id + speaker + timestamp + content`를 해싱한 SHA-256 기반 문자열 고유 키를 정의하여 `ON CONFLICT DO NOTHING`으로 적재를 멱등화했습니다.
+* **수정 이유**: 파이프라인의 핵심은 "몇 번을 재실행해도 DB에 중복 유입이 없고 동일 결과가 보장되어야 한다"는 멱등성 원칙이기 때문입니다.
 
 ---
 
-### 사례 5 — Makefile dbt 옵션 순서 버그 수정
+## 4. 구현 단계별 AI 기여와 지원자의 직접적 기술 개입 요약
 
-**AI 초안**: `Makefile`의 `DBT` 변수를 `dbt --profiles-dir ./dbt_project`로 선언하여 전역 옵션처럼 사용  
-**직접 수정**: dbt CLI는 `dbt [subcommand] --profiles-dir ...` 순서를 요구하므로, `DBT := dbt`로 변수를 단순화하고 `--profiles-dir` 옵션을 각 커맨드 라인에 명시적으로 이동
+리뷰어의 효율적인 검토를 위해 마일스톤 전반에 걸친 AI의 작업 영역과 지원자의 검증 포인트를 일목요연하게 정리합니다.
 
-**수정 이유**: AI가 생성한 Makefile은 `dbt --profiles-dir run` 순서로 작성되어 실제 실행 시 "No such option '--profiles-dir'" 오류가 발생했음. 올바른 순서는 `dbt run --profiles-dir`로, 옵션이 서브커맨드 뒤에 와야 함. `make run` 실행 검증 단계에서 직접 오류를 확인하고 수정.
-
----
-
-### 사례 6 — dbt-utils 의존성 누락 발견 및 데이터 검증 강화
-
-**AI 초안**: dbt 기본 내장 테스트만 사용하여 `confidence` (0.0 ~ 1.0) 범위를 검증하려 함.  
-**직접 수정**: dbt 기본 테스트(`unique`, `not_null` 등)로는 부동소수점 범위(Range) 테스트가 불가능함을 발견하고, `dbt_project/packages.yml`에 `dbt-utils` 라이브러리를 직접 명시하여 `dbtdeps` 설치 단계를 추가하도록 지시.
-
-**수정 이유**: AI는 confidence 컬럼의 한계 검증을 단순한 schema validation으로 처리하려 했으나, 실제 프로덕션 레벨의 정밀한 품질 관리를 위해서는 `dbt-utils`의 `accepted_range` 테스트가 필수적임. AI가 생략한 패키지 종속성을 초기에 잡아내어 빌드 안정성을 확보함.
+| 마일스톤 / 단계 | AI 수행 및 기여 작업 | 지원자 직접 개입 및 검증 포인트 (철학 반영) |
+|---|---|---|
+| **M1. 수집 파이프라인**<br>*(transcriber / ingest)* | - 구/신 포맷 transcript 파싱<br>- sample_meeting.json 데이터 생성<br>- DDL 초기화 뼈대 설계 | - **raw_meetings 테이블 추가**: 회의 메타데이터 분리 설계<br>- **stg_utterances 정제 임계값 튜닝**: 단답형 의미 보존 조율<br>- **config.py 보안 정책**: `.env` 미작성 시 구동 차단 강제 |
+| **M2. LLM AI 추출**<br>*(extract / dbt marts)* | - Pydantic JSON Schema 검증 모델 작성<br>- Gemini 2.5 Flash 호출 및 매핑 코드 작성<br>- dbt Marts 비정규화 모델링 | - **3회 실패 시 confidence=0 폴백 설계**: 실패 건 누락 차단<br>- **dbt-utils accepted_range 데이터 테스트 도입**: 적재 후 2차 방어<br>- **test_extract_validation.py 구축**: 10가지 엣지케이스 단위 테스트 검증망 구축 |
+| **M3. Streamlit 대시보드**<br>*(app / dashboard)* | - Streamlit 레이아웃 및 4대 핵심 위젯 구현<br>- Slack Payload 템플릿 구성 | - **예외 안전성 설계**: 데이터가 없는 초기 상태에서도 앱이 깨지지 않고 업로더를 띄우도록 `df.empty` 조건문 예외 처리<br>- **BoW 불용어 사전 강화**: 광고 도메인 무의미 용어 추가 차단 |
+| **선택 가산점 연동**<br>*(WhisperX / Slack)* | - WhisperX 오디오 STT + pyannote diarization 연동 뼈대 코드 구현 | - **WhisperX 3.8.6 CLI 버그 패치**: pyannote 인증 관련 토큰 누락 디버깅<br>- **Slack Webhook 실제 전송 UI 연동**: 전송 결과 피드백 바인딩 |
 
 ---
 
-### 사례 7 — utterance_id의 멱등적 데이터 타입 강제
+## 5. AI 도움 없이 전적으로 지원자가 직접 설계한 철학적 영역
 
-**AI 초안**: raw 발화 테이블 설계에서 `utterance_id`를 `SERIAL`과 `VARCHAR`로 혼용하여 기재함.  
-**직접 수정**: `SERIAL`과 같은 자동 증가 정수형 PK는 파이프라인 재실행 시 중복 유입에 취약하며 멱등성을 깨뜨리므로, `meeting_id + speaker + timestamp + content(hash)`의 해시 기반 `VARCHAR`로 고정하도록 지시.
-
-**수정 이유**: 원천 데이터 수집(EL) 및 dbt 변환(T)을 무한히 재실행해도 항상 동일한 상태를 유지해야 하는 '멱등성(Idempotency)' 원칙을 엄격하게 지키기 위해, 자동 증가형 키를 차단하고 해시 기반의 자연 키(Natural Key) 성격의 고유 식별자를 직접 명문화함.
-
----
-
-## 4. 구현 단계 AI 활용 내역
-
-### [Milestone 1] 수집 파이프라인 (transcriber.py / ingest.py / dbt staging)
-
-**AI가 수행한 작업**
-- `data/sample_meeting.json`: plan.md 섹션 3 스키마 기반으로 광고 미디어 도메인 16발화 샘플 데이터 생성
-- `src/transcriber.py`: `BaseTranscriber` 추상 인터페이스 + `FileTranscriber` 구현
-- `src/ingest.py`: SHA-256 해시 기반 `utterance_id` 생성 + `ON CONFLICT` upsert 적재
-- `dbt_project/` 초기화: `dbt_project.yml`, `profiles.yml`, `packages.yml`, `stg_utterances.sql`, `schema.yml`
-
-**프롬프트 방식**
-- "sample_meeting.json → transcriber.py → ingest.py 순서로 진행" — 순서를 명시해 단계별로 실행
-- 작업 완료마다 `python -m src.ingest` 실행 및 DB 직접 조회로 실제 적재 여부 검증 지시
-
-**직접 개입한 판단**
-- `raw_meetings` 테이블 추가: AI 초안에는 없었으나, `mart_minutes`의 `title`/`date` 조인 소스 문제를 해결하기 위해 meeting 메타데이터 전용 테이블을 별도로 두도록 설계 변경 지시
-- `config.py` 보안 수정: AI가 `os.getenv("POSTGRES_PASSWORD", "mobidays1234")`처럼 패스워드 기본값을 코드에 하드코딩한 것을 발견하고, 민감 정보는 `.env` 필수 로드로 강제하도록 직접 수정 지시
-- `stg_utterances.sql` 잡음 제거 기준: "LENGTH > 5" 조건은 AI가 제안했으나, 광고 도메인 단답 발화("네", "알겠습니다")가 의미 있는 발화임을 고려해 기준을 최소화하도록 검토 후 유지 결정
-
----
-
----
-
-### [Milestone 2] AI 추출 파이프라인 (extract.py / dbt marts / schema.yml)
-
-**AI가 수행한 작업**
-- `src/extract.py`: `ActionItemSchema` / `MinutesSummarySchema` Pydantic 모델, Mock LLM 데이터, Gemini API 호출, 3회 재시도 로직, `_match_utterance_id()` 발화 매핑, `_upsert_action_items()` / `_upsert_minutes()` upsert 구현
-- `dbt_project/models/marts/mart_action_items.sql`: `action_items_raw` + `raw_meetings` LEFT JOIN 비정규화
-- `dbt_project/models/marts/mart_minutes.sql`: `raw_minutes` + `raw_meetings` LEFT JOIN
-- `dbt_project/models/marts/schema.yml`: `dbt-utils accepted_range`, `accepted_values` 테스트 선언
-
-**프롬프트 방식**
-- "extract.py → dbt marts 순서로, plan.md 섹션 4.3~4.4 스키마를 그대로 반영해줘"
-- 각 단계 완료 후 `python -m src.extract` 실행 및 DB 직접 조회로 실제 데이터 확인 지시
-
-**직접 개입한 판단**
-- `_extract_action_items` 폴백 설계 확인: 3회 재시도 후 최종 실패 시 `confidence=0` + `is_ambiguous=True` 항목을 검수 큐로 보내는 방식이 설계 원칙과 맞는지 검토 후 승인
-- 프롬프트 품질 결정: 도메인 약어 사전(`_DOMAIN_CONTEXT`), 잡음 처리 지침(`_NOISE_INSTRUCTIONS`), R&R 핑퐁 few-shot 예시(`_FEW_SHOT`) 3개 섹션 구조는 AI 제안을 그대로 채택. 광고 도메인 특화 문구("SA", "DA", "소재" 등)는 검토 후 유지 결정
-
----
-
-### [Milestone 3] Streamlit 대시보드 (dashboard.py)
-
-**AI가 수행한 작업**
-- `app/dashboard.py`: `mart_action_items` / `mart_minutes` 쿼리, 위젯 4종(메트릭·바차트·저신뢰도 테이블·의사결정 expander), Slack JSON 페이로드 생성 및 사이드바 다운로드 버튼 구현
-
-**프롬프트 방식**
-- "plan.md Milestone 3 요구사항을 기준으로 dashboard.py 구현. `mart_action_items`, `mart_minutes` 테이블을 읽는 위젯 4종 + Slack 사이드바"
-
-**직접 개입한 판단**
-- `@st.cache_data(ttl=60)` 캐싱 적용 여부: AI가 제안한 60초 TTL을 실시간성과 DB 부하 사이 적정값으로 판단하여 채택
-- 빈 데이터 처리 방식: `df.empty`일 때 `st.warning` + `st.stop()`으로 조기 종료하는 패턴은 AI 초안에 없었으나, 파이프라인 미실행 상태에서 앱을 열었을 때 스택트레이스 대신 명확한 안내 메시지를 보여줘야 한다고 판단해 추가 지시
-
----
-
-### [전체 검증] end-to-end 파이프라인 통합 테스트
-
-**AI가 수행한 작업**
-- `make run` → `make test` → `make dashboard` 순서로 전체 파이프라인 검증
-- dbt 16개 테스트 전체 PASS 확인
-- `make demo` 타겟 추가: 파이프라인 실행 + 대시보드 시작을 단일 명령으로 처리
-- Gemini 모델 `gemini-1.5-flash` → `gemini-2.5-flash` 교체 (v1beta API 지원 종료 대응)
-- `LLM_MODE=real` 실제 호출 검증: 액션아이템 4건 추출, confidence 0.95~0.98, dbt test 16/16 PASS
-
-**직접 개입한 판단**
-- Makefile 버그 발견(사례 5 참고) 및 수정 지시
-- Gemini 모델 교체 시 `gemini-2.0-flash` 대신 `gemini-2.5-flash` 선택 — 최신 안정 모델로 성능 우선
-
----
-
----
-
-### [Step 1] FileTranscriber 신 포맷 지원
-
-**AI가 수행한 작업**
-- `src/transcriber.py`: 신 포맷(`segments` 키) 자동 감지 로직 추가
-  - `Utterance.timestamp` → `Optional[str] = None` 변경
-  - `_load_legacy()` / `_load_new()` 분리, 파일명 해시 기반 `meeting_id` 자동 생성
-- 신 포맷 데이터(37발화) 전체 ingest 검증
-
-**프롬프트 방식**
-- 실제 test_data JSON 구조를 보여주고 "기존 FileTranscriber가 두 포맷을 모두 처리하게 수정해줘"
-
-**직접 개입한 판단**
-- STT 확장 로드맵 구상: JSON 파일 → mp3/Whisper → 마이크 실시간 3단계 방향은 직접 설계
-- `BaseTranscriber` 인터페이스가 이미 이 확장을 수용하는 구조임을 확인하고 Step 1~3 로드맵 확정
-
----
-
-### [Step 2 - A] WhisperTranscriber — mp3 STT + 화자 분리
-
-**AI가 수행한 작업**
-- `src/transcriber.py`: `WhisperTranscriber` 클래스 구현
-  - whisperx STT (faster-whisper 백엔드) + pyannote 화자 분리 통합
-  - `whisperx.diarize.DiarizationPipeline` 올바른 API 경로 탐색 및 적용
-  - mp3/wav/m4a/flac 지원을 위한 `AUDIO_EXTENSIONS` 상수 추가
-- `src/config.py`: `HUGGINGFACE_TOKEN` 환경변수 추가
-- `app/dashboard.py`: 음성 파일 업로드 시 `WhisperTranscriber` 자동 선택
-- `requirements-whisperx.txt`: 선택 설치 파일 분리
-- `.env.example`: `HUGGINGFACE_TOKEN` 및 모델 동의 안내 추가
-
-**직접 개입한 판단**
-- whisperx 3.8.6 API 변경 대응: `DiarizationPipeline` 위치(`whisperx.diarize`), 파라미터명(`use_auth_token` → `token`) 오류를 직접 디버깅하여 수정 지시
-- pyannote 모델 동의: `speaker-diarization-3.1` → 실제 로드되는 모델이 `speaker-diarization-community-1`임을 확인하고 해당 모델 동의 진행 결정
-- 속도 문제 인식: CPU 환경에서 4분 음성 처리에 5~8분 소요 → 현재는 기능 구현 완료 상태로 유지, 사전 처리 CLI 스크립트 추가는 후순위로 결정
-
----
-
-### [Step 2 - B] 대시보드 파이프라인 실행 UI
-
-**AI가 수행한 작업**
-- `app/dashboard.py` 사이드바 "새 회의 업로드" 섹션 구현
-  - `st.file_uploader` → `FileTranscriber` 파싱 → 발화자 감지
-  - 화자 이름 수정 입력 폼 (session_state로 재실행 간 유지)
-  - 파이프라인 실행 버튼 → `st.status()` 5단계 진행 표시
-  - 완료 후 `st.cache_data.clear()` + `st.rerun()` 결과 화면 자동 갱신
-- `_run_pipeline()` 함수: Python 직접 임포트 방식으로 ingest·extract 호출, dbt는 subprocess
-
-**프롬프트 방식**
-- "사이드바에 JSON 업로드 → 화자 매핑 → 파이프라인 실행 흐름을 구현해줘"
-- 기획안 v2 섹션 3.4(사이드바 채택), 3.5(Python 직접 임포트) 결정사항을 그대로 반영
-
-**직접 개입한 판단**
-- pyannote.audio(화자 분리) 후순위로 보류 결정 — HuggingFace 라이선스 동의 자동화 불가 + 과제 외부 의존성 제약
-- WhisperX 없이 JSON 업로드 → 파이프라인 실행 흐름을 먼저 완성하는 B 경로 선택
-- `df.empty` 시 `st.stop()` 제거 결정 — 데이터 없는 초기 상태에서도 업로드 섹션 접근 가능해야 함
-
----
-
-### [대시보드 위젯 명세 일치 + README 보완]
-
-**AI가 수행한 작업**
-- 대시보드 위젯 명세와 현재 구현 갭 분석
-- `app/dashboard.py` 전면 수정:
-  - 섹션1: 날짜별 발생 추이 바차트 (`meeting_date` 기준 groupby)
-  - 섹션2: 미완료(open) Top 5 — `status='open'` 필터 + 내림차순 정렬
-  - 섹션3 (신규): 캠페인/광고주별 키워드 — BoW(`_extract_keywords`), STOPWORDS 기반 불용어 제거
-  - 섹션4: confidence 히스토그램(0.1 버킷) + 기존 드릴다운 테이블 유지
-- `README.md`에 **프롬프트 설계 근거**, **가정 사항** 섹션 신규 추가
-- Plan 모드로 구현 전 설계 검토 진행
-
-**프롬프트 방식**
-- 과제.md 전문을 읽힌 뒤 갭 분석 요청 → 계획 수립 → Plan 모드 승인 후 구현
-- "konlpy 사용 금지, 공백 분리 + 불용어 방식으로 BoW 구현" 제약 명시
-
-**직접 개입한 판단**
-- 위젯 명세와 현재 구현 불일치를 직접 발견하고 수정 우선순위 결정
-- BoW 키워드 STOPWORDS 목록: AI 초안에 기본 조사만 있었으나 광고 도메인 범용 단어("완료", "확인", "진행" 등) 추가 지시
-- Plan 모드 사용: 구현 전 설계를 검토하고 승인하는 방식 선택 — 마감 직전 대형 변경에 대한 리스크 관리
-
----
-
-### [잔존 이슈 수정 — update_v2 기반]
-
-**AI가 수행한 작업**
-- `requirements.txt`: `requests`, `pytest` 추가 (Slack 전송 런타임 오류 방지, unit test 실행 보호)
-- `docker-compose.yml`: `POSTGRES_PASSWORD` 하드코딩 → `.env` 환경변수 참조로 교체
-- `README.md`: real 모드 멱등성 한계 가정 사항에 명시
-- `tests/test_extract_validation.py`: LLM 신뢰화 핵심 로직 unit test 10개 작성
-  - pydantic 스키마 boundary 검증, confidence 반올림, assignee=None, is_ambiguous 보존
-  - 3회 재시도 후 confidence=0 폴백 경로 (monkeypatch)
-  - 2회차 성공 시 정상 반환 경로 (monkeypatch)
-- `Makefile`: `make test-unit` 타겟 추가
-
-**직접 개입한 판단**
-- Antigravity 코드 리뷰(update_v2.md)를 검토하여 이미 처리된 항목([A][C][D][F][I]) 확인 후 미처리 항목만 선별
-- unit test 항목: AI 초안에 `_extract_action_items` import가 unused로 표시됐으나, 폴백 테스트가 내부적으로 호출하므로 유지 결정
-
----
-
-### [Slack 실제 전송 연동]
-
-**AI가 수행한 작업**
-- `src/config.py`: `SLACK_WEBHOOK_URL` 환경변수 추가
-- `app/dashboard.py`: Slack 사이드바에 **"Slack으로 전송"** 버튼 추가
-  - `requests.post(SLACK_WEBHOOK_URL, json=payload)` 실제 전송
-  - 성공/실패 피드백 (`st.success` / `st.error`)
-  - `SLACK_WEBHOOK_URL` 미설정 시 버튼 비활성화 처리
-- `.env.example`: `SLACK_WEBHOOK_URL` 항목 추가
-
-**직접 개입한 판단**
-- Slack Webhook URL 발급 및 설정은 직접 진행
-- 실제 전송 성공 확인 후 구현 완료 결정
-
----
-
-## 5. AI를 사용하지 않은 판단 영역
-
-- **1순위 페인포인트 결정** (액션아이템 누락 > 정리 시간): 기획안 작성 시 직접 판단
-- **`is_ambiguous` 필드 도입**: "흐릿한 결정을 버리지 않고 플래그로 보존"하는 아이디어는 직접 설계
-- **마감 일정 기준 우선순위 조정**: AI는 이상적인 일정을 제안하지만, 무엇을 버리고 무엇을 지킬지는 직접 결정
-- **STT 확장 로드맵 방향**: JSON → mp3 → 마이크 3단계 구조는 직접 구상. `BaseTranscriber` 인터페이스가 이를 수용하는 구조임을 확인한 뒤 진행 방향 결정
+*   **비용 vs 리스크의 가치 판단**: 회의 요약 시간 단축보다 **액션아이템 누락 차단**이 광고주 마케팅 일정을 수호하는 핵심 리스크 제어 영역임을 재정의했습니다.
+*   **is_ambiguous 메타 필드 설계**: LLM에게 책임을 묻고 억지 담당자를 뽑게 만드는 대신, 애매한 R&R은 `is_ambiguous=true`로 표시하여 대시보드 검수 큐로 모이도록 설계했습니다. 이는 기술 오류에 대처하는 **인간 협업(Human-in-the-loop) 아키텍처**를 독창적으로 적용한 사례입니다.
+*   **STT 확장 3단계 로드맵 구축**: `BaseTranscriber` 추상 인터페이스를 사전에 설계하여 JSON 업로드(Step 1) → 로컬 오디오 STT(Step 2) → 실시간 마이크(Step 3)까지 코어 엔진 변경 없이 연결 가능한 **확장성 높은 인터페이스 지향 아키텍처**를 구상했습니다.
