@@ -196,6 +196,25 @@
 
 ---
 
+### [Step 2 - A] WhisperTranscriber — mp3 STT + 화자 분리
+
+**AI가 수행한 작업**
+- `src/transcriber.py`: `WhisperTranscriber` 클래스 구현
+  - whisperx STT (faster-whisper 백엔드) + pyannote 화자 분리 통합
+  - `whisperx.diarize.DiarizationPipeline` 올바른 API 경로 탐색 및 적용
+  - mp3/wav/m4a/flac 지원을 위한 `AUDIO_EXTENSIONS` 상수 추가
+- `src/config.py`: `HUGGINGFACE_TOKEN` 환경변수 추가
+- `app/dashboard.py`: 음성 파일 업로드 시 `WhisperTranscriber` 자동 선택
+- `requirements-whisperx.txt`: 선택 설치 파일 분리
+- `.env.example`: `HUGGINGFACE_TOKEN` 및 모델 동의 안내 추가
+
+**직접 개입한 판단**
+- whisperx 3.8.6 API 변경 대응: `DiarizationPipeline` 위치(`whisperx.diarize`), 파라미터명(`use_auth_token` → `token`) 오류를 직접 디버깅하여 수정 지시
+- pyannote 모델 동의: `speaker-diarization-3.1` → 실제 로드되는 모델이 `speaker-diarization-community-1`임을 확인하고 해당 모델 동의 진행 결정
+- 속도 문제 인식: CPU 환경에서 4분 음성 처리에 5~8분 소요 → 현재는 기능 구현 완료 상태로 유지, 사전 처리 CLI 스크립트 추가는 후순위로 결정
+
+---
+
 ### [Step 2 - B] 대시보드 파이프라인 실행 UI
 
 **AI가 수행한 작업**
