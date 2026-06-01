@@ -63,7 +63,7 @@ Action_recommend/
 ├── requirements.txt            # 기본 코어 의존성 (requests, pytest 포함)
 ├── requirements-whisperx.txt   # WhisperX STT 확장 설치 전용 의존성
 ├── tests/
-│   └── test_extract_validation.py  # LLM 신뢰화 핵심 로직 유효성 단위 테스트 (10개)
+│   └── test_extract_validation.py  # LLM 신뢰화 핵심 로직 유효성 단위 테스트 (12개)
 ├── src/
 │   ├── config.py               # 환경 변수, DB URI, LLM_MODE 관리
 │   ├── database.py             # raw DDL 초기화 및 커넥션 풀링
@@ -77,7 +77,7 @@ Action_recommend/
 │       ├── staging/            # 화자 정규화, 5글자 이하 단독 잡음 및 중복 제거 레이어
 │       └── marts/              # 비정규화 조인 마트 및 dbt-utils 범위 테스트 레이어
 └── app/
-    └── dashboard.py            # Streamlit 대시보드 (위젯 4종 + Slack 전송 사이드바)
+    └── dashboard.py            # Streamlit 대시보드 (위젯 7종 + Slack 전송 사이드바)
 ```
 
 ---
@@ -118,19 +118,38 @@ make demo
 
 1. **도메인 컨텍스트 주입 (`_DOMAIN_CONTEXT`)**
    * SA, DA, ROAS, CPM 등 광고 마케팅 약어 사전을 주입하여 LLM이 도메인 약어를 잡음으로 오해해 환각을 내는 현상을 예방했습니다.
-2. **암묵적 R&R의 안전한 구조화 (`_NOISE_INSTRUCTIONS` & `_FEW_SHOT`)**
-   * "그건 제가 챙길게요"처럼 한국어 회의 특유의 R&R 핑퐁 상황을 해결하기 위해 **[최종 명시적 확인 발화자]**를 assignee로 매핑하게 학습시켰습니다.
+2. **암묵적 R&R의 안전한 구조화 (`_NOISE_INSTRUCTIONS` & `_FEW_SHOT` 4종)**
+   * 한국어 회의 특유의 4가지 패턴을 few-shot으로 커버했습니다: ① **R&R 핑퐁** (최종 명시적 확인 발화자를 assignee로 매핑), ② **직무 맥락 기반 암묡적 담당자 추론** ("제가 DA 성과 분석 담당이니까"처럼 직무·역할로 자신이 담당임을 암묡적으로 밝히는 케이스), ③ **단순 수긍 필터링** ("네, 맞습니다" 등 확인·동의 발화는 액션아이템 아님), ④ **상대적 기한 처리** ("이번 주 금요일"은 `due_is_inferred=true` 표시).
    * **(핵심 철학)**: 담당자가 모호할 경우 억지로 가짜 담당자를 조작하는 대신 `assignee=NULL` 및 `is_ambiguous=TRUE`로 보존하여 대시보드 검수 테이블로 모이게 설계했습니다.
-3. **Pydantic 2단 방어 및 3회 피드백 재시도**
+3. **`related_campaign` 필드로 캠페인 단위 추적**
+   * 발화에서 언급된 캠페인명(구글 SA, 카카오 DA, 네이버 SA 등)을 LLM이 직접 추출해 `related_campaign` 컬럼에 저장합니다. 언급이 없으면 `null`로 설정하여 강제 추측을 방지합니다.
+   * 이 필드를 대시보드의 캠페인별 미완료 건수 및 반복 이슈 키워드 위젯에서 그룹핑 기준으로 활용합니다.
+4. **Pydantic 2단 방어 및 3회 피드백 재시도**
    * 타입, confidence 범위, 소스 발화 누락을 Pydantic Schema로 실시간 감시하며 에러 발생 시 `error_hint`를 동봉해 최대 3회 재시도를 요청합니다.
    * 최종 실패 시에도 유실 방지를 위해 `confidence=0.0`, `is_ambiguous=TRUE`를 달아 검수 테이블로 안전하게 폴백(Fallback) 적재합니다.
+
+---
+
+## 📊 대시보드 위젯 설계 근거
+
+Streamlit 대시보드는 단순 데이터 열람을 넘어 **"지금 당장 누가 무엇을 해야 하는가"를 운영자가 즉각 판단할 수 있도록** 7개 위젯을 설계했습니다.
+
+| 위젯 | 구현 근거 |
+|---|---|
+| **상태 요약 메트릭** (전체 / Open / Done / Blocked / **기한 초과**) | 랜딩 즉시 전체 현황을 숫자로 파악. 기한 초과 카운트를 별도 강조해 즉각 액션이 필요한 규모를 명시 |
+| **회의·액션아이템 발생 추이** | 날짜별 액션아이템 생성 건수 추이로 회의 주기와 업무량 증감 패턴을 파악, 운영 로드 관리 근거로 활용 |
+| **담당자별 미완료 Top N** | 특정 인원에 업무가 편중되는 현상을 조기 감지하여 선제적 R&R 재배분을 유도. 광고 운영 조직에서 특정 AE에 미완료가 집중되면 캠페인 지연 리스크가 직결됨 |
+| **캠페인별 미완료 건수** | LLM이 발화에서 추출한 `related_campaign` 필드를 기준으로 집계. 특정 캠페인(구글 SA, 카카오 DA 등)에 미완료가 집중될 경우 해당 광고주 대응이 늦어지는 리스크를 가시화 |
+| **캠페인별 반복 이슈 키워드** | `related_campaign` 기준으로 BoW 키워드를 집계하여 동일 캠페인에서 반복적으로 등장하는 문제 패턴(소재, 예산, 검수 등)을 탐지. 구조적 원인 파악에 활용 |
+| **LLM 신뢰도 분포 + 저신뢰도 드릴다운** | confidence 히스토그램으로 LLM 추출 품질을 모니터링. `confidence < 0.7` 항목을 드릴다운 테이블로 노출해 human-in-the-loop 검수 큐 역할을 수행 |
+| **기한 초과 현황** | `status=open` 이고 `due_date < 오늘`인 항목을 경고와 함께 테이블로 표시. 누락 위험이 가장 높은 항목을 우선순위화하여 운영자 즉각 대응 유도 |
 
 ---
 
 ## 📈 검증 완료 내역
 
 *   **dbt 데이터 품질 테스트**: `make test` 구동 시 stg_utterances, mart_action_items, mart_minutes의 무결성 테스트 **16/16 PASS**.
-*   **LLM 신뢰화 단위 테스트**: `make test-unit` 구동 시 Pydantic 경계값, nullability 보존, 3회 시도 실패 시 강제 폴백 및 2회차 성공 조기 차단 등 **10/10 PASS**.
+*   **LLM 신뢰화 단위 테스트**: `make test-unit` 구동 시 Pydantic 경계값, nullability 보존, `related_campaign` 필드 검증, 3회 시도 실패 시 강제 폴백 및 2회차 성공 조기 차단 등 **12/12 PASS**.
 
 ---
 
