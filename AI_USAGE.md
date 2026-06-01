@@ -165,12 +165,15 @@
 ### [전체 검증] end-to-end 파이프라인 통합 테스트
 
 **AI가 수행한 작업**
-- `make run` 실행 → `make test` 실행 → `make dashboard` 실행 순서로 전체 파이프라인 검증
+- `make run` → `make test` → `make dashboard` 순서로 전체 파이프라인 검증
 - dbt 16개 테스트 전체 PASS 확인
+- `make demo` 타겟 추가: 파이프라인 실행 + 대시보드 시작을 단일 명령으로 처리
+- Gemini 모델 `gemini-1.5-flash` → `gemini-2.5-flash` 교체 (v1beta API 지원 종료 대응)
+- `LLM_MODE=real` 실제 호출 검증: 액션아이템 4건 추출, confidence 0.95~0.98, dbt test 16/16 PASS
 
 **직접 개입한 판단**
 - Makefile 버그 발견(사례 5 참고) 및 수정 지시
-- `make dashboard` 실행 후 `curl http://localhost:8501` 응답으로 서버 기동 확인
+- Gemini 모델 교체 시 `gemini-2.0-flash` 대신 `gemini-2.5-flash` 선택 — 최신 안정 모델로 성능 우선
 
 ---
 

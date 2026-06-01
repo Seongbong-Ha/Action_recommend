@@ -109,22 +109,21 @@ make setup
 ### 파이프라인 실행
 
 ```bash
-# 전체 파이프라인 (DB초기화 → ingest → dbt staging → extract → dbt marts)
-make run
+# 파이프라인 실행 + 대시보드 자동 시작 (권장)
+make demo
 
-# 데이터 품질 테스트 (dbt test 16개)
-make test
-
-# 대시보드 실행
-make dashboard
+# 개별 실행
+make run        # DB초기화 → ingest → dbt staging → extract → dbt marts
+make test       # dbt test 16개
+make dashboard  # Streamlit 대시보드만 실행
 ```
 
-### LLM 실제 호출 (Gemini API)
+### LLM 실제 호출 (Gemini 2.5 Flash)
 
-`.env` 파일에 `GEMINI_API_KEY`를 설정한 뒤:
+`.env` 파일에 `LLM_MODE=real`, `GEMINI_API_KEY`를 설정한 뒤:
 
 ```bash
-LLM_MODE=real make run
+make demo
 ```
 
 ---
