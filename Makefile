@@ -24,6 +24,9 @@ run:
 test:
 	$(DBT) test --project-dir dbt_project --profiles-dir dbt_project
 
+test-unit:
+	$(PYTHON) -m pytest tests/ -v
+
 dashboard:
 	$(STREAMLIT) run app/dashboard.py
 
