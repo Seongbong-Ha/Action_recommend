@@ -9,12 +9,12 @@
 
 | 영역 | 선택 | 선정 이유 |
 |---|---|---|
-| **Database** | PostgreSQL (Docker Compose) | 아래 비교표 참고 |
-| **Data Transformation** | dbt-core + dbt-utils | SQL 변환 단계에서 `ref()` 기반 자동 lineage와 `schema.yml` 선언 테스트를 제공. 별도 품질 검증 로직 없이 `dbt test` 한 번으로 적재 후 데이터 품질을 보증. |
-| **LLM** | Gemini API + Mock 토글 (`LLM_MODE`) | 실제 호출만 쓰면 재현성·레이트리밋 리스크 있음. Mock 고정 출력을 기본값으로 두어 멱등성을 보장하고, 환경변수 하나로 실제 호출로 전환 가능하게 설계. |
-| **Validation** | Pydantic v2 | LLM 출력의 환각·포맷 붕괴를 적재 전에 차단. 스키마 위반 시 재시도 루프를 돌고, 그래도 실패하면 `confidence=0`으로 검수 큐로 보내는 2단 방어선의 첫 번째 관문. |
-| **STT** | Transcript JSON 직접 사용 (Transcriber 인터페이스) | 외부 API 유출 금지 원칙 + 시간 제약. STT를 `BaseTranscriber` 추상 인터페이스 뒤에 두어 추후 Whisper/마이크 실시간 입력으로 교체 비용을 최소화. |
-| **Dashboard** | Streamlit | Python 단일 스택 유지. 별도 BI 서버 없이 코드로 위젯·드릴다운을 자유롭게 구성 가능. |
+| **Database** | PostgreSQL (Docker Compose) | 아래 비교표 참고. trade-off: Docker 셋업 비용이 있으나 MVCC 동시 쓰기·JSONB·upsert를 모두 지원하는 유일한 선택지. |
+| **Data Transformation** | dbt-core + dbt-utils | `ref()` 기반 자동 lineage와 `schema.yml` 선언 테스트를 제공. trade-off: PoC 규모에는 셋업 비용이 있으나 lineage 가시성·데이터 품질 테스트 확보로 정당화. |
+| **LLM** | Gemini API + Mock 토글 (`LLM_MODE`) | 실제 호출만 쓰면 재현성·레이트리밋 리스크 있음. Mock 고정 출력을 기본값으로 두어 멱등성을 보장. trade-off: 실제 호출 정확도 vs 재현성·비용의 균형을 환경변수 하나로 전환 가능하게 설계. |
+| **Validation** | Pydantic v2 | LLM 출력의 환각·포맷 붕괴를 적재 전에 차단. 재시도 후 실패 시 `confidence=0` 검수 큐. trade-off: 검증 강도를 높일수록 폴백 빈도가 늘어나므로 임계값은 실운영 데이터로 튜닝 필요. |
+| **STT** | Transcript JSON 직접 사용 (Transcriber 인터페이스) | 외부 API 유출 금지 원칙 + 시간 제약. trade-off: 실시간 STT를 포기하는 대신 `BaseTranscriber` 인터페이스로 Whisper/마이크 교체 비용을 최소화. |
+| **Dashboard** | Streamlit | Python 단일 스택 유지. 별도 BI 서버 없이 코드로 위젯·드릴다운 구성. trade-off: Metabase 대비 커스터마이징 자유도가 높지만 대규모 동시 접속에는 한계. |
 
 ### Database 선정 근거 — SQLite vs DuckDB vs PostgreSQL
 
@@ -60,6 +60,8 @@
 - **Python**: 추출·적재(EL) + LLM 로직
 - **dbt**: SQL 변환(T) + 데이터 품질 테스트
 - **Transcriber 인터페이스**: 입력 소스를 파이프라인과 분리 — JSON·음성파일·마이크를 동일한 `Meeting` 객체로 추상화
+
+**모듈 분리 기준**: 외부 API 호출·비즈니스 로직(LLM 추출·pydantic 검증)은 Python, SQL 변환·데이터 품질 검증은 dbt로 책임을 분리. Python이 "무엇을 추출할지"를 결정하고, dbt가 "추출된 데이터가 올바른지"를 보증한다.
 
 ---
 
