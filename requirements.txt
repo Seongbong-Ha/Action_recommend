@@ -14,5 +14,9 @@ dbt-postgres==1.7.14
 # Dashboard
 streamlit==1.35.0
 
+# HTTP
+requests==2.31.0
+
 # Utilities
 python-dotenv==1.0.1
+pytest==8.3.5

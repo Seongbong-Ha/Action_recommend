@@ -1,0 +1,129 @@
+"""
+LLM 추출 신뢰화 핵심 로직 검증 테스트.
+
+이 과제의 핵심 평가 포인트인 "LLM 출력을 신뢰 가능한 데이터 자산으로 만드는 엔지니어링"이
+실제로 동작함을 증명한다.
+  - pydantic 스키마 강제 (적재 전 검증)
+  - 3회 재시도 후 confidence=0 폴백 경로
+  - is_ambiguous / assignee=None 보존 로직
+"""
+import pytest
+from pydantic import ValidationError
+
+from src.extract import ActionItemSchema, MinutesSummarySchema, _extract_action_items
+
+
+# ---------------------------------------------------------------------------
+# ActionItemSchema 유효성 검사
+# ---------------------------------------------------------------------------
+
+def test_confidence_above_max_rejected():
+    """confidence > 1.0 은 pydantic이 거부해야 한다."""
+    with pytest.raises(ValidationError):
+        ActionItemSchema(content="테스트", confidence=1.5, source_quote="발화")
+
+
+def test_confidence_below_min_rejected():
+    """confidence < 0.0 은 pydantic이 거부해야 한다."""
+    with pytest.raises(ValidationError):
+        ActionItemSchema(content="테스트", confidence=-0.1, source_quote="발화")
+
+
+def test_confidence_boundary_accepted():
+    """confidence 0.0 과 1.0 경계값은 허용되어야 한다."""
+    low = ActionItemSchema(content="테스트", confidence=0.0, source_quote="발화")
+    high = ActionItemSchema(content="테스트", confidence=1.0, source_quote="발화")
+    assert low.confidence == 0.0
+    assert high.confidence == 1.0
+
+
+def test_confidence_rounded_to_4_decimals():
+    """confidence 는 소수점 4자리로 반올림되어야 한다."""
+    item = ActionItemSchema(content="테스트", confidence=0.123456, source_quote="발화")
+    assert item.confidence == 0.1235
+
+
+def test_assignee_nullable():
+    """assignee 는 None 허용 — 암묵적 R&R 강제 지정 금지."""
+    item = ActionItemSchema(content="테스트", confidence=0.9, source_quote="발화", assignee=None)
+    assert item.assignee is None
+
+
+def test_is_ambiguous_preserved():
+    """is_ambiguous=True 항목은 버리지 않고 보존되어야 한다."""
+    item = ActionItemSchema(
+        content="흐릿한 결정",
+        confidence=0.5,
+        source_quote="뭔가 해야 할 것 같은데",
+        is_ambiguous=True,
+    )
+    assert item.is_ambiguous is True
+
+
+def test_content_required():
+    """content 누락 시 ValidationError가 발생해야 한다."""
+    with pytest.raises(ValidationError):
+        ActionItemSchema(confidence=0.9, source_quote="발화")
+
+
+# ---------------------------------------------------------------------------
+# MinutesSummarySchema 유효성 검사
+# ---------------------------------------------------------------------------
+
+def test_minutes_schema_decisions_list():
+    """decisions 는 리스트 타입이어야 한다."""
+    m = MinutesSummarySchema(summary="요약", decisions=["결정1", "결정2"])
+    assert isinstance(m.decisions, list)
+    assert len(m.decisions) == 2
+
+
+# ---------------------------------------------------------------------------
+# 재시도·폴백 경로 검증
+# ---------------------------------------------------------------------------
+
+def test_fallback_on_all_retries_fail(monkeypatch):
+    """3회 재시도 후 모두 실패하면 confidence=0 + is_ambiguous=True 폴백 항목이 반환되어야 한다."""
+    import src.extract as ext
+
+    monkeypatch.setattr(ext, "LLM_MODE", "real")
+    monkeypatch.setattr(ext, "_call_gemini", lambda _: {"action_items": [{"bad_field": "invalid"}]})
+
+    result = ext._extract_action_items("발화록 텍스트", "2026-06-01")
+
+    assert len(result) == 1
+    assert result[0].confidence == 0.0
+    assert result[0].is_ambiguous is True
+    assert result[0].assignee is None
+
+
+def test_retry_succeeds_on_second_attempt(monkeypatch):
+    """첫 번째 시도 실패 후 두 번째 시도에서 올바른 응답이 오면 정상 반환되어야 한다."""
+    import src.extract as ext
+
+    call_count = {"n": 0}
+
+    def mock_gemini(_):
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            return {"action_items": [{"bad": "schema"}]}
+        return {
+            "action_items": [{
+                "content": "정상 액션아이템",
+                "assignee": "홍길동",
+                "due_date": None,
+                "due_is_inferred": False,
+                "confidence": 0.9,
+                "source_quote": "제가 처리할게요.",
+                "is_ambiguous": False,
+            }]
+        }
+
+    monkeypatch.setattr(ext, "LLM_MODE", "real")
+    monkeypatch.setattr(ext, "_call_gemini", mock_gemini)
+
+    result = ext._extract_action_items("발화록 텍스트", "2026-06-01")
+
+    assert call_count["n"] == 2
+    assert len(result) == 1
+    assert result[0].content == "정상 액션아이템"
+    assert result[0].confidence == 0.9
