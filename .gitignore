@@ -222,6 +222,7 @@ CLAUDE.md
 plan.md
 
 # dbt
+dbt_packages/
 dbt_project/dbt_packages/
 dbt_project/target/
 dbt_project/.user.yml
@@ -233,3 +234,6 @@ update.md
 
 # 테스트 데이터 (음성 파일 및 실제 회의 transcript 포함)
 test_data/
+기획안_ver2.md
+기획안_초안.md
+과제.md

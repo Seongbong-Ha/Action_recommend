@@ -196,6 +196,25 @@
 
 ---
 
+### [Step 2 - A] WhisperTranscriber — mp3 STT + 화자 분리
+
+**AI가 수행한 작업**
+- `src/transcriber.py`: `WhisperTranscriber` 클래스 구현
+  - whisperx STT (faster-whisper 백엔드) + pyannote 화자 분리 통합
+  - `whisperx.diarize.DiarizationPipeline` 올바른 API 경로 탐색 및 적용
+  - mp3/wav/m4a/flac 지원을 위한 `AUDIO_EXTENSIONS` 상수 추가
+- `src/config.py`: `HUGGINGFACE_TOKEN` 환경변수 추가
+- `app/dashboard.py`: 음성 파일 업로드 시 `WhisperTranscriber` 자동 선택
+- `requirements-whisperx.txt`: 선택 설치 파일 분리
+- `.env.example`: `HUGGINGFACE_TOKEN` 및 모델 동의 안내 추가
+
+**직접 개입한 판단**
+- whisperx 3.8.6 API 변경 대응: `DiarizationPipeline` 위치(`whisperx.diarize`), 파라미터명(`use_auth_token` → `token`) 오류를 직접 디버깅하여 수정 지시
+- pyannote 모델 동의: `speaker-diarization-3.1` → 실제 로드되는 모델이 `speaker-diarization-community-1`임을 확인하고 해당 모델 동의 진행 결정
+- 속도 문제 인식: CPU 환경에서 4분 음성 처리에 5~8분 소요 → 현재는 기능 구현 완료 상태로 유지, 사전 처리 CLI 스크립트 추가는 후순위로 결정
+
+---
+
 ### [Step 2 - B] 대시보드 파이프라인 실행 UI
 
 **AI가 수행한 작업**
@@ -237,6 +256,22 @@
 - 위젯 명세와 현재 구현 불일치를 직접 발견하고 수정 우선순위 결정
 - BoW 키워드 STOPWORDS 목록: AI 초안에 기본 조사만 있었으나 광고 도메인 범용 단어("완료", "확인", "진행" 등) 추가 지시
 - Plan 모드 사용: 구현 전 설계를 검토하고 승인하는 방식 선택 — 마감 직전 대형 변경에 대한 리스크 관리
+
+---
+
+### [Slack 실제 전송 연동]
+
+**AI가 수행한 작업**
+- `src/config.py`: `SLACK_WEBHOOK_URL` 환경변수 추가
+- `app/dashboard.py`: Slack 사이드바에 **"Slack으로 전송"** 버튼 추가
+  - `requests.post(SLACK_WEBHOOK_URL, json=payload)` 실제 전송
+  - 성공/실패 피드백 (`st.success` / `st.error`)
+  - `SLACK_WEBHOOK_URL` 미설정 시 버튼 비활성화 처리
+- `.env.example`: `SLACK_WEBHOOK_URL` 항목 추가
+
+**직접 개입한 판단**
+- Slack Webhook URL 발급 및 설정은 직접 진행
+- 실제 전송 성공 확인 후 구현 완료 결정
 
 ---
 

@@ -13,11 +13,13 @@ import streamlit as st
 PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from src.config import DATABASE_URL
+import requests
+
+from src.config import DATABASE_URL, SLACK_WEBHOOK_URL
 from src.database import init_db
 from src.extract import extract_from_meeting
 from src.ingest import ingest_meeting
-from src.transcriber import FileTranscriber
+from src.transcriber import AUDIO_EXTENSIONS, FileTranscriber, WhisperTranscriber
 
 LOW_CONFIDENCE_THRESHOLD = 0.7
 TOP_N_ASSIGNEE = 5
@@ -295,23 +297,33 @@ if not df.empty:
 with st.sidebar:
     st.header("새 회의 업로드")
 
-    uploaded_file = st.file_uploader("transcript JSON", type=["json"])
+    uploaded_file = st.file_uploader(
+        "transcript JSON 또는 음성 파일",
+        type=["json", "mp3", "wav", "m4a", "flac"],
+    )
 
     if uploaded_file is not None:
         file_key = uploaded_file.name
+        suffix = Path(file_key).suffix.lower()
 
         if st.session_state.get("uploaded_file_name") != file_key:
-            with tempfile.NamedTemporaryFile(suffix=".json", delete=False, mode="wb") as f:
+            with tempfile.NamedTemporaryFile(suffix=suffix, delete=False, mode="wb") as f:
                 f.write(uploaded_file.getvalue())
                 tmp_path = f.name
             try:
-                meeting = FileTranscriber().load(tmp_path)
+                if suffix in AUDIO_EXTENSIONS:
+                    st.info("음성 파일 감지 — WhisperX STT + 화자 분리 실행 중... (수 분 소요)")
+                    with st.spinner("WhisperX 처리 중..."):
+                        meeting = WhisperTranscriber(model_size="base").load(tmp_path)
+                else:
+                    meeting = FileTranscriber().load(tmp_path)
+
                 st.session_state["uploaded_file_name"] = file_key
                 st.session_state["pending_meeting"] = meeting
                 speakers = sorted(set(u.speaker for u in meeting.utterances))
                 st.session_state["speaker_map"] = {s: s for s in speakers}
             except Exception as e:
-                st.error(f"파일 파싱 오류: {e}")
+                st.error(f"파일 처리 오류: {e}")
                 st.session_state.pop("pending_meeting", None)
 
         meeting = st.session_state.get("pending_meeting")
@@ -338,7 +350,7 @@ with st.sidebar:
     # 사이드바: Slack 페이로드
     # ---------------------------------------------------------------------------
 
-    st.header("Slack 알림 페이로드 (Mock)")
+    st.header("Slack 알림 페이로드")
     if df.empty:
         st.info("데이터 없음")
     else:
@@ -348,9 +360,26 @@ with st.sidebar:
         else:
             payload = _build_slack_payload(open_items)
             st.json(payload)
-            st.download_button(
-                label="JSON 다운로드",
-                data=json.dumps(payload, ensure_ascii=False, indent=2),
-                file_name="slack_payload.json",
-                mime="application/json",
-            )
+
+            col_a, col_b = st.columns(2)
+            with col_a:
+                st.download_button(
+                    label="JSON 다운로드",
+                    data=json.dumps(payload, ensure_ascii=False, indent=2),
+                    file_name="slack_payload.json",
+                    mime="application/json",
+                    use_container_width=True,
+                )
+            with col_b:
+                if SLACK_WEBHOOK_URL:
+                    if st.button("Slack으로 전송", use_container_width=True, type="primary"):
+                        try:
+                            res = requests.post(SLACK_WEBHOOK_URL, json=payload, timeout=5)
+                            if res.status_code == 200:
+                                st.success("Slack 전송 완료!")
+                            else:
+                                st.error(f"전송 실패: {res.status_code}")
+                        except Exception as e:
+                            st.error(f"전송 오류: {e}")
+                else:
+                    st.caption("SLACK_WEBHOOK_URL 미설정")
