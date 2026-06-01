@@ -86,7 +86,28 @@
 
 ---
 
-## 4. AI를 사용하지 않은 판단 영역
+## 4. 구현 단계 AI 활용 내역
+
+### [Milestone 1] 수집 파이프라인 (transcriber.py / ingest.py / dbt staging)
+
+**AI가 수행한 작업**
+- `data/sample_meeting.json`: plan.md 섹션 3 스키마 기반으로 광고 미디어 도메인 16발화 샘플 데이터 생성
+- `src/transcriber.py`: `BaseTranscriber` 추상 인터페이스 + `FileTranscriber` 구현
+- `src/ingest.py`: SHA-256 해시 기반 `utterance_id` 생성 + `ON CONFLICT` upsert 적재
+- `dbt_project/` 초기화: `dbt_project.yml`, `profiles.yml`, `packages.yml`, `stg_utterances.sql`, `schema.yml`
+
+**프롬프트 방식**
+- "sample_meeting.json → transcriber.py → ingest.py 순서로 진행" — 순서를 명시해 단계별로 실행
+- 작업 완료마다 `python -m src.ingest` 실행 및 DB 직접 조회로 실제 적재 여부 검증 지시
+
+**직접 개입한 판단**
+- `raw_meetings` 테이블 추가: AI 초안에는 없었으나, `mart_minutes`의 `title`/`date` 조인 소스 문제를 해결하기 위해 meeting 메타데이터 전용 테이블을 별도로 두도록 설계 변경 지시
+- `config.py` 보안 수정: AI가 `os.getenv("POSTGRES_PASSWORD", "mobidays1234")`처럼 패스워드 기본값을 코드에 하드코딩한 것을 발견하고, 민감 정보는 `.env` 필수 로드로 강제하도록 직접 수정 지시
+- `stg_utterances.sql` 잡음 제거 기준: "LENGTH > 5" 조건은 AI가 제안했으나, 광고 도메인 단답 발화("네", "알겠습니다")가 의미 있는 발화임을 고려해 기준을 최소화하도록 검토 후 유지 결정
+
+---
+
+## 5. AI를 사용하지 않은 판단 영역
 
 - **1순위 페인포인트 결정** (액션아이템 누락 > 정리 시간): 기획안 작성 시 직접 판단
 - **`is_ambiguous` 필드 도입**: "흐릿한 결정을 버리지 않고 플래그로 보존"하는 아이디어는 직접 설계

@@ -1,0 +1,21 @@
+version: 2
+
+models:
+  - name: stg_utterances
+    description: "화자 정규화, 잡음 제거, 중복 발화 제거된 정제 발화 뷰"
+    columns:
+      - name: utterance_id
+        description: "발화 고유 식별자 (해시 기반)"
+        tests:
+          - unique
+          - not_null
+      - name: meeting_id
+        description: "회의 식별자"
+        tests:
+          - not_null
+      - name: speaker
+        tests:
+          - not_null
+      - name: content
+        tests:
+          - not_null

@@ -1,0 +1,12 @@
+action_recommend:
+  target: dev
+  outputs:
+    dev:
+      type: postgres
+      host: localhost
+      port: 5432
+      dbname: action_recommend
+      user: mobidays
+      password: mobidays1234
+      schema: public
+      threads: 1
