@@ -1,0 +1,20 @@
+services:
+  postgres:
+    image: postgres:15
+    container_name: action_recommend_db
+    environment:
+      POSTGRES_DB: action_recommend
+      POSTGRES_USER: mobidays
+      POSTGRES_PASSWORD: mobidays1234
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mobidays -d action_recommend"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  postgres_data:
