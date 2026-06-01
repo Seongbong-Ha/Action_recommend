@@ -2,6 +2,7 @@ import json
 import subprocess
 import sys
 import tempfile
+from collections import Counter
 from pathlib import Path
 
 import pandas as pd
@@ -19,6 +20,17 @@ from src.ingest import ingest_meeting
 from src.transcriber import FileTranscriber
 
 LOW_CONFIDENCE_THRESHOLD = 0.7
+TOP_N_ASSIGNEE = 5
+TOP_N_KEYWORDS = 10
+
+STOPWORDS = {
+    "이", "가", "을", "를", "은", "는", "의", "에", "에서", "으로", "로",
+    "와", "과", "도", "만", "까지", "부터", "이다", "하다", "있다", "없다",
+    "그", "저", "것", "수", "등", "및", "후", "전", "더", "잘", "좀", "다",
+    "안", "못", "또", "하고", "하여", "합니다", "했습니다", "됩니다",
+    "위해", "대해", "관련", "통해", "경우", "때", "이후", "해당", "위한",
+    "대한", "이번", "다음", "오늘", "내일", "방향", "진행", "확인", "완료",
+}
 
 # ---------------------------------------------------------------------------
 # 데이터 로딩
@@ -65,6 +77,20 @@ def load_minutes() -> pd.DataFrame:
 
 
 # ---------------------------------------------------------------------------
+# 키워드 추출 (BoW)
+# ---------------------------------------------------------------------------
+
+def _extract_keywords(texts: list, top_n: int = TOP_N_KEYWORDS) -> dict:
+    counter = Counter()
+    for text in texts:
+        for word in str(text).split():
+            word = word.strip(".,()[]!?")
+            if len(word) >= 2 and word not in STOPWORDS:
+                counter[word] += 1
+    return dict(counter.most_common(top_n))
+
+
+# ---------------------------------------------------------------------------
 # Slack 페이로드 생성
 # ---------------------------------------------------------------------------
 
@@ -88,9 +114,7 @@ def _build_slack_payload(open_items: pd.DataFrame) -> dict:
     blocks.append(
         {
             "type": "context",
-            "elements": [
-                {"type": "mrkdwn", "text": f"총 {len(open_items)}건 미완료"}
-            ],
+            "elements": [{"type": "mrkdwn", "text": f"총 {len(open_items)}건 미완료"}],
         }
     )
     return {"blocks": blocks}
@@ -116,23 +140,18 @@ def _run_pipeline(meeting, speaker_map: dict):
     with st.status("파이프라인 실행 중...", expanded=True) as status:
         st.write("① DB 초기화")
         init_db()
-
         st.write("② 발화 적재 (ingest)")
         ingest_meeting(meeting)
-
         st.write("③ dbt staging")
         if not _dbt_run("staging"):
             status.update(label="dbt staging 실패", state="error")
             return
-
         st.write("④ LLM 추출 (extract)")
         extract_from_meeting(meeting.meeting_id)
-
         st.write("⑤ dbt marts")
         if not _dbt_run("marts"):
             status.update(label="dbt marts 실패", state="error")
             return
-
         status.update(label="완료!", state="complete")
 
     st.cache_data.clear()
@@ -153,11 +172,10 @@ if df.empty:
     st.warning("데이터가 없습니다. 사이드바에서 파일을 업로드하거나 터미널에서 `make run`을 실행하세요.")
 
 # ---------------------------------------------------------------------------
-# 섹션 1: 상태 요약
+# 상태 요약 메트릭
 # ---------------------------------------------------------------------------
 
 if not df.empty:
-    st.subheader("상태 요약")
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("전체", len(df))
     col2.metric("Open", len(df[df["status"] == "open"]))
@@ -165,28 +183,79 @@ if not df.empty:
     col4.metric("Blocked", len(df[df["status"] == "blocked"]))
 
     # ---------------------------------------------------------------------------
-    # 섹션 2: 담당자별 현황
+    # 섹션 1: 회의·액션아이템 발생 추이
     # ---------------------------------------------------------------------------
 
-    st.subheader("담당자별 액션아이템")
-    assignee_counts = (
-        df.groupby("assignee", dropna=False)
-        .size()
+    st.subheader("회의·액션아이템 발생 추이")
+    trend = (
+        df.groupby("meeting_date").size()
         .reset_index(name="건수")
+        .set_index("meeting_date")
     )
-    assignee_counts["assignee"] = assignee_counts["assignee"].fillna("미배정")
-    st.bar_chart(assignee_counts.set_index("assignee")["건수"])
+    if trend.empty:
+        st.info("추이 데이터 없음")
+    else:
+        st.bar_chart(trend)
 
     # ---------------------------------------------------------------------------
-    # 섹션 3: 저신뢰도 검수
+    # 섹션 2: 담당자별 미완료 Top N
     # ---------------------------------------------------------------------------
 
-    st.subheader(f"저신뢰도 항목 검수 (confidence < {LOW_CONFIDENCE_THRESHOLD})")
+    st.subheader(f"담당자별 미완료 액션아이템 Top {TOP_N_ASSIGNEE}")
+    open_df = df[df["status"] == "open"].copy()
+    if open_df.empty:
+        st.info("미완료 항목 없음")
+    else:
+        open_df["assignee"] = open_df["assignee"].fillna("미배정")
+        top_assignee = (
+            open_df.groupby("assignee").size()
+            .reset_index(name="미완료 건수")
+            .sort_values("미완료 건수", ascending=False)
+            .head(TOP_N_ASSIGNEE)
+            .set_index("assignee")
+        )
+        st.bar_chart(top_assignee)
+
+    # ---------------------------------------------------------------------------
+    # 섹션 3: 캠페인/광고주별 반복 이슈 키워드
+    # ---------------------------------------------------------------------------
+
+    st.subheader("캠페인/광고주별 반복 이슈 키워드")
+    campaigns = df["meeting_title"].dropna().unique()
+    if len(campaigns) == 0:
+        st.info("키워드 데이터 없음")
+    else:
+        for campaign in campaigns:
+            contents = df[df["meeting_title"] == campaign]["content"].tolist()
+            keywords = _extract_keywords(contents, top_n=TOP_N_KEYWORDS)
+            if keywords:
+                with st.expander(f"{campaign}", expanded=True):
+                    kw_df = pd.DataFrame(
+                        list(keywords.items()), columns=["키워드", "빈도"]
+                    ).set_index("키워드")
+                    st.bar_chart(kw_df)
+
+    # ---------------------------------------------------------------------------
+    # 섹션 4: confidence 분포 + 저신뢰도 드릴다운
+    # ---------------------------------------------------------------------------
+
+    st.subheader(f"LLM 추출 신뢰도 분포 (confidence)")
+
+    bins = [round(i * 0.1, 1) for i in range(11)]
+    labels = [f"{round(i*0.1,1)}~{round((i+1)*0.1,1)}" for i in range(10)]
+    conf_df = df.copy()
+    conf_df["conf_bucket"] = pd.cut(
+        conf_df["confidence"], bins=bins, labels=labels, include_lowest=True
+    )
+    hist = conf_df["conf_bucket"].value_counts().sort_index().reset_index()
+    hist.columns = ["구간", "건수"]
+    st.bar_chart(hist.set_index("구간"))
+
+    st.markdown(f"**저신뢰도 항목 검수 (confidence < {LOW_CONFIDENCE_THRESHOLD})**")
     low_conf = df[df["confidence"] < LOW_CONFIDENCE_THRESHOLD][
         ["content", "assignee", "confidence", "is_ambiguous", "source_quote", "status"]
     ].copy()
     low_conf["assignee"] = low_conf["assignee"].fillna("미배정")
-
     if low_conf.empty:
         st.info("저신뢰도 항목 없음")
     else:
@@ -200,7 +269,7 @@ if not df.empty:
         )
 
     # ---------------------------------------------------------------------------
-    # 섹션 4: 의사결정 목록
+    # 섹션 5: 주요 의사결정
     # ---------------------------------------------------------------------------
 
     st.subheader("주요 의사결정")
@@ -231,12 +300,10 @@ with st.sidebar:
     if uploaded_file is not None:
         file_key = uploaded_file.name
 
-        # 새 파일 업로드 시에만 파싱
         if st.session_state.get("uploaded_file_name") != file_key:
             with tempfile.NamedTemporaryFile(suffix=".json", delete=False, mode="wb") as f:
                 f.write(uploaded_file.getvalue())
                 tmp_path = f.name
-
             try:
                 meeting = FileTranscriber().load(tmp_path)
                 st.session_state["uploaded_file_name"] = file_key

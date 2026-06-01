@@ -135,14 +135,16 @@ make demo
 
 ## 대시보드 구성
 
-**메인 화면 (위젯 4종)**
+**메인 화면 (위젯 4종 + 요약)**
 
-| 섹션 | 내용 |
-|---|---|
-| **상태 요약** | 전체 / Open / Done / Blocked 메트릭 카드 |
-| **담당자별 현황** | 담당자별 액션아이템 건수 바차트 |
-| **저신뢰도 검수** | confidence < 0.7 항목 드릴다운 테이블 |
-| **주요 의사결정** | 회의별 요약 + 결정사항 expander |
+| # | 섹션 | 내용 |
+|---|---|---|
+| - | 상태 요약 | 전체 / Open / Done / Blocked 메트릭 카드 |
+| 1 | **회의·액션아이템 발생 추이** | 날짜별 액션아이템 건수 바차트 |
+| 2 | **담당자별 미완료 Top 5** | status=open 필터 + 담당자별 건수 내림차순 바차트 |
+| 3 | **캠페인/광고주별 반복 이슈 키워드** | BoW 방식 키워드 빈도 바차트 (회의별) |
+| 4 | **LLM 신뢰도 분포 + 드릴다운** | confidence 히스토그램 + 저신뢰도 항목 테이블 |
+| - | **주요 의사결정** | 회의별 요약 + 결정사항 expander |
 
 **사이드바**
 
@@ -168,6 +170,40 @@ JSON 파일 업로드
 1. **LLM 출력을 신뢰 가능한 자산으로** — structured output + pydantic 검증 + `confidence` / `source_utterance_id` / `is_ambiguous` 3개 필드로 추출 근거를 데이터에 동봉
 2. **모든 단계가 재실행에 안전** — 해시 기반 ID + `ON CONFLICT` upsert로 멱등성 확보
 3. **원천 데이터는 외부로 나가지 않음** — STT 포함 모든 처리가 로컬 경계 안에서 완결
+
+---
+
+## 프롬프트 설계 근거
+
+`src/extract.py`의 `_build_action_items_prompt()` 구현 기반.
+
+### 도메인 컨텍스트 주입 (`_DOMAIN_CONTEXT`)
+SA·DA·CPM·ROAS·A/B 테스트·CTA·소재·세팅 등 광고 마케팅 약어 사전을 프롬프트에 직접 주입. LLM이 도메인 용어를 일반 의미로 오해하는 환각을 사전 차단.
+
+### 잡음 처리 지침 (`_NOISE_INSTRUCTIONS`)
+- "알겠습니다", "네, 맞습니다" 등 단순 수긍 발화는 액션아이템 제외
+- R&R 핑퐁 구간에서는 **최종 명시적 확인 발화**를 assignee 근거로 사용
+- 담당자 불명확 시 추측 금지 → `assignee=null + is_ambiguous=true` 강제
+- 기한 미명시 시 → `due_date=null`, 상대 표현("이번 주") → `due_is_inferred=true`
+
+### few-shot 예시 (`_FEW_SHOT`)
+R&R이 3인 대화에서 핑퐁되다가 C가 최종 확인하는 예시를 제공.  
+`assignee=C`, `source_quote=C의 발화`로 추출하는 패턴을 LLM에 학습시킴.
+
+### 스키마 강제 + 검증·재시도
+1. pydantic `ActionItemSchema`로 LLM 출력 검증 (confidence 범위, 필수 필드)
+2. 스키마 위반 시 `error_hint`를 프롬프트에 포함해 최대 3회 재시도
+3. 최종 실패 시 `confidence=0 + is_ambiguous=true` 항목으로 검수 큐에 보존 (누락 방지)
+
+---
+
+## 가정 사항
+
+- **STT 대체**: 외부 SaaS API로 원천 데이터 전송이 금지되어 제공 transcript JSON을 그대로 사용. `BaseTranscriber` 인터페이스로 추후 로컬 Whisper 교체 비용 최소화.
+- **단일 회의 PoC**: 주차별 추이·반복 키워드 위젯은 현재 1건 데이터라 단조롭지만, 다회의 적재 시 즉시 의미 있는 차트로 동작하는 구조로 설계.
+- **멱등성**: `hash(meeting_id + normalize(content))` 기반 PK + `ON CONFLICT DO UPDATE` — 파이프라인 재실행 시 중복 적재 없음.
+- **LLM_MODE=mock 기본값**: `GEMINI_API_KEY` 없이도 전체 파이프라인 동작. `LLM_MODE=real` 설정 시 Gemini 2.5 Flash 실제 호출.
+- **화자 역할 정보**: 현재 파이프라인은 화자 이름만 사용. 역할(팀장/마케터 등)은 프롬프트 도메인 컨텍스트로 처리하며, DB 스키마 확장 없이 대응 가능.
 
 ---
 
