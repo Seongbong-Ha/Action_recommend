@@ -196,6 +196,27 @@
 
 ---
 
+### [Step 2 - B] 대시보드 파이프라인 실행 UI
+
+**AI가 수행한 작업**
+- `app/dashboard.py` 사이드바 "새 회의 업로드" 섹션 구현
+  - `st.file_uploader` → `FileTranscriber` 파싱 → 발화자 감지
+  - 화자 이름 수정 입력 폼 (session_state로 재실행 간 유지)
+  - 파이프라인 실행 버튼 → `st.status()` 5단계 진행 표시
+  - 완료 후 `st.cache_data.clear()` + `st.rerun()` 결과 화면 자동 갱신
+- `_run_pipeline()` 함수: Python 직접 임포트 방식으로 ingest·extract 호출, dbt는 subprocess
+
+**프롬프트 방식**
+- "사이드바에 JSON 업로드 → 화자 매핑 → 파이프라인 실행 흐름을 구현해줘"
+- 기획안 v2 섹션 3.4(사이드바 채택), 3.5(Python 직접 임포트) 결정사항을 그대로 반영
+
+**직접 개입한 판단**
+- pyannote.audio(화자 분리) 후순위로 보류 결정 — HuggingFace 라이선스 동의 자동화 불가 + 과제 외부 의존성 제약
+- WhisperX 없이 JSON 업로드 → 파이프라인 실행 흐름을 먼저 완성하는 B 경로 선택
+- `df.empty` 시 `st.stop()` 제거 결정 — 데이터 없는 초기 상태에서도 업로드 섹션 접근 가능해야 함
+
+---
+
 ## 5. AI를 사용하지 않은 판단 영역
 
 - **1순위 페인포인트 결정** (액션아이템 누락 > 정리 시간): 기획안 작성 시 직접 판단
