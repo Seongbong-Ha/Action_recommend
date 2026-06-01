@@ -1,4 +1,9 @@
-.PHONY: setup run test dashboard all
+.PHONY: setup run test dashboard demo all
+
+ifneq (,$(wildcard .env))
+  include .env
+  export
+endif
 
 PYTHON    := python
 DBT       := dbt
@@ -7,6 +12,7 @@ STREAMLIT := streamlit
 setup:
 	docker-compose up -d
 	$(PYTHON) -m pip install -r requirements.txt
+	$(DBT) deps --project-dir dbt_project --profiles-dir dbt_project
 
 run:
 	$(PYTHON) -m src.database
@@ -20,5 +26,7 @@ test:
 
 dashboard:
 	$(STREAMLIT) run app/dashboard.py
+
+demo: run dashboard
 
 all: setup run test

@@ -207,7 +207,7 @@ def _call_gemini(prompt: str) -> dict:
     import google.generativeai as genai
     genai.configure(api_key=GEMINI_API_KEY)
     model = genai.GenerativeModel(
-        model_name="gemini-1.5-flash",
+        model_name="gemini-2.5-flash",
         generation_config=genai.GenerationConfig(
             response_mime_type="application/json",
         ),

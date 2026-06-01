@@ -1,5 +1,5 @@
 WITH source AS (
-    SELECT * FROM raw_utterances
+    SELECT * FROM {{ source('public', 'raw_utterances') }}
 ),
 
 -- 잡음성 단독 발화 제거 (1~2음절 감탄사 등)

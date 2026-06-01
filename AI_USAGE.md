@@ -66,12 +66,17 @@
 
 ---
 
-### 사례 4 — profiles.yml 보안 처리 방식 결정
+### 사례 4 — profiles.yml 보안 처리 방식 결정 (1차 → 2차 수정)
 
-**AI 피드백**: "`profiles.yml`을 레포 안에 두면 DB 접속 정보가 git에 올라갈 수 있다"고 지적  
-**직접 결정**: `~/.dbt/profiles.yml` 전역 경로 대신, 레포 안에 두되 `.gitignore`로 차단 + `--profiles-dir ./dbt_project` 옵션으로 dbt 실행하는 방식 선택
+**1차 결정**: `~/.dbt/profiles.yml` 전역 경로 대신, 레포 안에 두되 `.gitignore`로 차단하는 방식 선택  
+**문제 발견**: 실제 `.gitignore`에 `dbt_project/profiles.yml` 항목이 누락되어 있었고, 비밀번호가 평문으로 하드코딩된 채 커밋된 상태였음. 문서와 실제 상태가 불일치.
 
-**수정 이유**: 전역 경로 방식은 협업자가 별도로 파일을 만들어야 하는 온보딩 비용이 생김. PoC 단독 실행 환경에서는 레포 안에서 관리하되 git 차단하는 방식이 실행 편의성과 보안을 동시에 잡는다고 판단.
+**2차 수정 (코드 리뷰 후)**:
+- `profiles.yml`을 `env_var()` 기반으로 전면 수정 (하드코딩 제거)
+- `.gitignore`에 `dbt_project/profiles.yml` 추가
+- `dbt_project/profiles.example.yml` 생성 (온보딩 가이드)
+
+**교훈**: 문서에 "gitignore로 차단"이라고 썼으면 실제 .gitignore 파일을 열어 항목이 있는지 반드시 확인해야 함.
 
 ---
 
@@ -160,12 +165,55 @@
 ### [전체 검증] end-to-end 파이프라인 통합 테스트
 
 **AI가 수행한 작업**
-- `make run` 실행 → `make test` 실행 → `make dashboard` 실행 순서로 전체 파이프라인 검증
+- `make run` → `make test` → `make dashboard` 순서로 전체 파이프라인 검증
 - dbt 16개 테스트 전체 PASS 확인
+- `make demo` 타겟 추가: 파이프라인 실행 + 대시보드 시작을 단일 명령으로 처리
+- Gemini 모델 `gemini-1.5-flash` → `gemini-2.5-flash` 교체 (v1beta API 지원 종료 대응)
+- `LLM_MODE=real` 실제 호출 검증: 액션아이템 4건 추출, confidence 0.95~0.98, dbt test 16/16 PASS
 
 **직접 개입한 판단**
 - Makefile 버그 발견(사례 5 참고) 및 수정 지시
-- `make dashboard` 실행 후 `curl http://localhost:8501` 응답으로 서버 기동 확인
+- Gemini 모델 교체 시 `gemini-2.0-flash` 대신 `gemini-2.5-flash` 선택 — 최신 안정 모델로 성능 우선
+
+---
+
+---
+
+### [Step 1] FileTranscriber 신 포맷 지원
+
+**AI가 수행한 작업**
+- `src/transcriber.py`: 신 포맷(`segments` 키) 자동 감지 로직 추가
+  - `Utterance.timestamp` → `Optional[str] = None` 변경
+  - `_load_legacy()` / `_load_new()` 분리, 파일명 해시 기반 `meeting_id` 자동 생성
+- 신 포맷 데이터(37발화) 전체 ingest 검증
+
+**프롬프트 방식**
+- 실제 test_data JSON 구조를 보여주고 "기존 FileTranscriber가 두 포맷을 모두 처리하게 수정해줘"
+
+**직접 개입한 판단**
+- STT 확장 로드맵 구상: JSON 파일 → mp3/Whisper → 마이크 실시간 3단계 방향은 직접 설계
+- `BaseTranscriber` 인터페이스가 이미 이 확장을 수용하는 구조임을 확인하고 Step 1~3 로드맵 확정
+
+---
+
+### [Step 2 - B] 대시보드 파이프라인 실행 UI
+
+**AI가 수행한 작업**
+- `app/dashboard.py` 사이드바 "새 회의 업로드" 섹션 구현
+  - `st.file_uploader` → `FileTranscriber` 파싱 → 발화자 감지
+  - 화자 이름 수정 입력 폼 (session_state로 재실행 간 유지)
+  - 파이프라인 실행 버튼 → `st.status()` 5단계 진행 표시
+  - 완료 후 `st.cache_data.clear()` + `st.rerun()` 결과 화면 자동 갱신
+- `_run_pipeline()` 함수: Python 직접 임포트 방식으로 ingest·extract 호출, dbt는 subprocess
+
+**프롬프트 방식**
+- "사이드바에 JSON 업로드 → 화자 매핑 → 파이프라인 실행 흐름을 구현해줘"
+- 기획안 v2 섹션 3.4(사이드바 채택), 3.5(Python 직접 임포트) 결정사항을 그대로 반영
+
+**직접 개입한 판단**
+- pyannote.audio(화자 분리) 후순위로 보류 결정 — HuggingFace 라이선스 동의 자동화 불가 + 과제 외부 의존성 제약
+- WhisperX 없이 JSON 업로드 → 파이프라인 실행 흐름을 먼저 완성하는 B 경로 선택
+- `df.empty` 시 `st.stop()` 제거 결정 — 데이터 없는 초기 상태에서도 업로드 섹션 접근 가능해야 함
 
 ---
 
@@ -174,3 +222,4 @@
 - **1순위 페인포인트 결정** (액션아이템 누락 > 정리 시간): 기획안 작성 시 직접 판단
 - **`is_ambiguous` 필드 도입**: "흐릿한 결정을 버리지 않고 플래그로 보존"하는 아이디어는 직접 설계
 - **마감 일정 기준 우선순위 조정**: AI는 이상적인 일정을 제안하지만, 무엇을 버리고 무엇을 지킬지는 직접 결정
+- **STT 확장 로드맵 방향**: JSON → mp3 → 마이크 3단계 구조는 직접 구상. `BaseTranscriber` 인터페이스가 이를 수용하는 구조임을 확인한 뒤 진행 방향 결정
