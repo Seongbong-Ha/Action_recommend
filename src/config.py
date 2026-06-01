@@ -24,3 +24,4 @@ DATABASE_URL = (
 
 LLM_MODE = os.getenv("LLM_MODE", "mock")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+HUGGINGFACE_TOKEN = os.getenv("HUGGINGFACE_TOKEN", "")
