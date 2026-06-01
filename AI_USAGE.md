@@ -177,8 +177,28 @@
 
 ---
 
+---
+
+### [Step 1] FileTranscriber 신 포맷 지원
+
+**AI가 수행한 작업**
+- `src/transcriber.py`: 신 포맷(`segments` 키) 자동 감지 로직 추가
+  - `Utterance.timestamp` → `Optional[str] = None` 변경
+  - `_load_legacy()` / `_load_new()` 분리, 파일명 해시 기반 `meeting_id` 자동 생성
+- 신 포맷 데이터(37발화) 전체 ingest 검증
+
+**프롬프트 방식**
+- 실제 test_data JSON 구조를 보여주고 "기존 FileTranscriber가 두 포맷을 모두 처리하게 수정해줘"
+
+**직접 개입한 판단**
+- STT 확장 로드맵 구상: JSON 파일 → mp3/Whisper → 마이크 실시간 3단계 방향은 직접 설계
+- `BaseTranscriber` 인터페이스가 이미 이 확장을 수용하는 구조임을 확인하고 Step 1~3 로드맵 확정
+
+---
+
 ## 5. AI를 사용하지 않은 판단 영역
 
 - **1순위 페인포인트 결정** (액션아이템 누락 > 정리 시간): 기획안 작성 시 직접 판단
 - **`is_ambiguous` 필드 도입**: "흐릿한 결정을 버리지 않고 플래그로 보존"하는 아이디어는 직접 설계
 - **마감 일정 기준 우선순위 조정**: AI는 이상적인 일정을 제안하지만, 무엇을 버리고 무엇을 지킬지는 직접 결정
+- **STT 확장 로드맵 방향**: JSON → mp3 → 마이크 3단계 구조는 직접 구상. `BaseTranscriber` 인터페이스가 이를 수용하는 구조임을 확인한 뒤 진행 방향 결정

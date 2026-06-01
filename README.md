@@ -13,7 +13,7 @@
 | **Data Transformation** | dbt-core + dbt-utils | SQL 변환 단계에서 `ref()` 기반 자동 lineage와 `schema.yml` 선언 테스트를 제공. 별도 품질 검증 로직 없이 `dbt test` 한 번으로 적재 후 데이터 품질을 보증. |
 | **LLM** | Gemini API + Mock 토글 (`LLM_MODE`) | 실제 호출만 쓰면 재현성·레이트리밋 리스크 있음. Mock 고정 출력을 기본값으로 두어 멱등성을 보장하고, 환경변수 하나로 실제 호출로 전환 가능하게 설계. |
 | **Validation** | Pydantic v2 | LLM 출력의 환각·포맷 붕괴를 적재 전에 차단. 스키마 위반 시 재시도 루프를 돌고, 그래도 실패하면 `confidence=0`으로 검수 큐로 보내는 2단 방어선의 첫 번째 관문. |
-| **STT** | Transcript JSON 직접 사용 (Transcriber 인터페이스) | 외부 API 유출 금지 원칙 + 시간 제약. STT를 `Transcriber` 추상 인터페이스 뒤에 두어 추후 로컬 Whisper 교체 비용을 0으로 유지. |
+| **STT** | Transcript JSON 직접 사용 (Transcriber 인터페이스) | 외부 API 유출 금지 원칙 + 시간 제약. STT를 `BaseTranscriber` 추상 인터페이스 뒤에 두어 추후 Whisper/마이크 실시간 입력으로 교체 비용을 최소화. |
 | **Dashboard** | Streamlit | Python 단일 스택 유지. 별도 BI 서버 없이 코드로 위젯·드릴다운을 자유롭게 구성 가능. |
 
 ### Database 선정 근거 — SQLite vs DuckDB vs PostgreSQL
@@ -45,7 +45,11 @@
 ## 아키텍처 흐름
 
 ```
-transcript JSON
+[입력 소스]
+  FileTranscriber (JSON)          ← 현재 지원 (구 포맷 / 신 포맷 자동 감지)
+  WhisperTranscriber (mp3)        ← Step 2 예정
+  MicTranscriber (마이크 실시간)   ← Step 3 예정
+        ↓ Meeting 객체
   → ① ingest.py          raw_utterances (Postgres, 불변)
   → ② dbt staging        stg_utterances (화자 정규화, 잡음 제거)
   → ③ extract.py + LLM   action_items_raw / raw_minutes (pydantic 검증 + upsert)
@@ -55,6 +59,7 @@ transcript JSON
 
 - **Python**: 추출·적재(EL) + LLM 로직
 - **dbt**: SQL 변환(T) + 데이터 품질 테스트
+- **Transcriber 인터페이스**: 입력 소스를 파이프라인과 분리 — JSON·음성파일·마이크를 동일한 `Meeting` 객체로 추상화
 
 ---
 
@@ -68,12 +73,12 @@ Action_recommend/
 ├── docker-compose.yml          # PostgreSQL 컨테이너 구성
 ├── requirements.txt
 ├── data/
-│   └── sample_meeting.json     # 광고 미디어 도메인 샘플 회의 (16발화)
+│   └── sample_meeting.json     # 광고 미디어 도메인 샘플 회의 (16발화, 구 포맷)
 ├── src/
 │   ├── config.py               # 환경 변수, DB URI, LLM_MODE 관리
 │   ├── database.py             # DDL 초기화 (raw 테이블 4종)
-│   ├── transcriber.py          # STT 추상 인터페이스 + FileTranscriber
-│   ├── ingest.py               # EL: transcript JSON → raw_utterances
+│   ├── transcriber.py          # BaseTranscriber 추상 인터페이스 + FileTranscriber (구/신 포맷 자동 감지)
+│   ├── ingest.py               # EL: transcript → raw_utterances
 │   └── extract.py              # LLM 추출 + pydantic 검증 → action_items_raw / raw_minutes
 ├── dbt_project/
 │   ├── dbt_project.yml
@@ -145,6 +150,50 @@ make demo
 1. **LLM 출력을 신뢰 가능한 자산으로** — structured output + pydantic 검증 + `confidence` / `source_utterance_id` / `is_ambiguous` 3개 필드로 추출 근거를 데이터에 동봉
 2. **모든 단계가 재실행에 안전** — 해시 기반 ID + `ON CONFLICT` upsert로 멱등성 확보
 3. **원천 데이터는 외부로 나가지 않음** — STT 포함 모든 처리가 로컬 경계 안에서 완결
+
+---
+
+## 입력 포맷 지원
+
+`FileTranscriber`는 두 가지 JSON 포맷을 자동 감지합니다.
+
+**구 포맷** (`utterances` 키 기반)
+```json
+{
+  "meeting_id": "meet_001",
+  "title": "주간 미디어 운영 회의",
+  "date": "2026-06-01",
+  "participants": ["홍길동", "김민지"],
+  "utterances": [
+    {"speaker": "홍길동", "content": "...", "timestamp": "2026-06-01T10:00:00Z"}
+  ]
+}
+```
+
+**신 포맷** (`segments` 키 기반 — STT 출력 형식)
+```json
+{
+  "language": "ko",
+  "speakers": [{"name": "수아", "role": "퍼포먼스 마케터"}],
+  "segments": [
+    {"id": 1, "line_no": 1, "speaker": "수아", "role": "...", "text": "..."}
+  ]
+}
+```
+
+신 포맷은 `meeting_id`를 파일명 해시로 자동 생성합니다.
+
+---
+
+## 향후 확장 로드맵 (STT)
+
+```
+Step 1  ✅ FileTranscriber — JSON 파일 (구/신 포맷 자동 감지)
+Step 2  🔲 WhisperTranscriber — mp3/wav 음성 파일 → 로컬 Whisper STT
+Step 3  🔲 MicTranscriber — 마이크 실시간 녹음 → Whisper → 파이프라인
+```
+
+`BaseTranscriber` 인터페이스를 구현하면 새 입력 소스를 추가해도 파이프라인 코드는 변경 불필요.
 
 ---
 
