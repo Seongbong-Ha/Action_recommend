@@ -1,4 +1,4 @@
-.PHONY: setup run test dashboard all
+.PHONY: setup run test dashboard demo all
 
 ifneq (,$(wildcard .env))
   include .env
@@ -26,5 +26,7 @@ test:
 
 dashboard:
 	$(STREAMLIT) run app/dashboard.py
+
+demo: run dashboard
 
 all: setup run test
