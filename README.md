@@ -58,23 +58,86 @@ transcript JSON
 
 ---
 
+## 디렉토리 구조
+
+```
+Action_recommend/
+├── Makefile                    # 파이프라인 전체 실행 오케스트레이터
+├── README.md
+├── AI_USAGE.md                 # AI 도구 활용 내역
+├── docker-compose.yml          # PostgreSQL 컨테이너 구성
+├── requirements.txt
+├── data/
+│   └── sample_meeting.json     # 광고 미디어 도메인 샘플 회의 (16발화)
+├── src/
+│   ├── config.py               # 환경 변수, DB URI, LLM_MODE 관리
+│   ├── database.py             # DDL 초기화 (raw 테이블 4종)
+│   ├── transcriber.py          # STT 추상 인터페이스 + FileTranscriber
+│   ├── ingest.py               # EL: transcript JSON → raw_utterances
+│   └── extract.py              # LLM 추출 + pydantic 검증 → action_items_raw / raw_minutes
+├── dbt_project/
+│   ├── dbt_project.yml
+│   ├── packages.yml            # dbt-utils 의존성
+│   ├── profiles.yml            # DB 연결 프로필 (.gitignore 차단)
+│   └── models/
+│       ├── staging/
+│       │   ├── schema.yml
+│       │   └── stg_utterances.sql
+│       └── marts/
+│           ├── schema.yml      # dbt-utils accepted_range 테스트 포함
+│           ├── mart_action_items.sql
+│           └── mart_minutes.sql
+└── app/
+    └── dashboard.py            # Streamlit 대시보드 (위젯 4종 + Slack 사이드바)
+```
+
+---
+
 ## 실행 방법
+
+### 사전 준비
 
 ```bash
 # 1. Postgres 컨테이너 실행
 docker-compose up -d
 
-# 2. 파이프라인 전체 실행 (ingest → dbt staging → extract → dbt marts → dbt test)
+# 2. 패키지 설치 및 dbt 패키지 설치
+pip install -r requirements.txt
+dbt deps --project-dir dbt_project --profiles-dir dbt_project
+```
+
+### 파이프라인 실행
+
+```bash
+# 전체 파이프라인 (DB초기화 → ingest → dbt staging → extract → dbt marts)
 make run
 
-# 3. 대시보드 실행
+# 데이터 품질 테스트 (dbt test 16개)
+make test
+
+# 대시보드 실행
 make dashboard
 ```
 
-LLM 실제 호출을 사용하려면:
+### LLM 실제 호출 (Gemini API)
+
+`.env` 파일에 `GEMINI_API_KEY`를 설정한 뒤:
+
 ```bash
 LLM_MODE=real make run
 ```
+
+---
+
+## 대시보드 구성 (위젯 4종)
+
+| 섹션 | 내용 |
+|---|---|
+| **상태 요약** | 전체 / Open / Done / Blocked 메트릭 카드 |
+| **담당자별 현황** | 담당자별 액션아이템 건수 바차트 |
+| **저신뢰도 검수** | confidence < 0.7 항목 드릴다운 테이블 |
+| **주요 의사결정** | 회의별 요약 + 결정사항 expander |
+| **사이드바** | Slack 알림 JSON 페이로드 미리보기 + 다운로드 |
 
 ---
 
@@ -83,3 +146,17 @@ LLM_MODE=real make run
 1. **LLM 출력을 신뢰 가능한 자산으로** — structured output + pydantic 검증 + `confidence` / `source_utterance_id` / `is_ambiguous` 3개 필드로 추출 근거를 데이터에 동봉
 2. **모든 단계가 재실행에 안전** — 해시 기반 ID + `ON CONFLICT` upsert로 멱등성 확보
 3. **원천 데이터는 외부로 나가지 않음** — STT 포함 모든 처리가 로컬 경계 안에서 완결
+
+---
+
+## 검증 결과
+
+`make run` + `make test` 전체 실행 결과:
+
+```
+dbt test: 16/16 PASS
+  - stg_utterances: unique, not_null (4개)
+  - mart_action_items: unique, not_null, accepted_range(confidence), accepted_values(status) (6개)
+  - mart_minutes: unique, not_null (3개)
+  - sources: 3개
+```

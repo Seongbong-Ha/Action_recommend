@@ -1,0 +1,18 @@
+# Database
+psycopg2-binary==2.9.9
+
+# Data validation
+pydantic==2.7.1
+
+# LLM
+google-generativeai==0.5.4
+
+# dbt
+dbt-core==1.7.14
+dbt-postgres==1.7.14
+
+# Dashboard
+streamlit==1.35.0
+
+# Utilities
+python-dotenv==1.0.1

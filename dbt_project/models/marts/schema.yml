@@ -1,0 +1,49 @@
+version: 2
+
+sources:
+  - name: public
+    schema: public
+    tables:
+      - name: action_items_raw
+      - name: raw_meetings
+      - name: raw_minutes
+
+models:
+  - name: mart_action_items
+    description: "액션아이템 + 회의 메타 조인 비정규화 테이블 (대시보드·Slack 알림용)"
+    columns:
+      - name: action_item_id
+        description: "hash(meeting_id:normalize(content)) — 멱등성 키"
+        tests:
+          - unique
+          - not_null
+      - name: meeting_id
+        tests:
+          - not_null
+      - name: content
+        tests:
+          - not_null
+      - name: confidence
+        description: "LLM 추출 신뢰도 (0.0~1.0)"
+        tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              min_value: 0
+              max_value: 1
+              inclusive: true
+      - name: status
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['open', 'done', 'blocked']
+
+  - name: mart_minutes
+    description: "회의 요약 + 주요 결정사항 + 회의 메타 조인 테이블"
+    columns:
+      - name: meeting_id
+        tests:
+          - unique
+          - not_null
+      - name: summary
+        tests:
+          - not_null
