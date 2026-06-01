@@ -259,6 +259,22 @@
 
 ---
 
+### [Slack 실제 전송 연동]
+
+**AI가 수행한 작업**
+- `src/config.py`: `SLACK_WEBHOOK_URL` 환경변수 추가
+- `app/dashboard.py`: Slack 사이드바에 **"Slack으로 전송"** 버튼 추가
+  - `requests.post(SLACK_WEBHOOK_URL, json=payload)` 실제 전송
+  - 성공/실패 피드백 (`st.success` / `st.error`)
+  - `SLACK_WEBHOOK_URL` 미설정 시 버튼 비활성화 처리
+- `.env.example`: `SLACK_WEBHOOK_URL` 항목 추가
+
+**직접 개입한 판단**
+- Slack Webhook URL 발급 및 설정은 직접 진행
+- 실제 전송 성공 확인 후 구현 완료 결정
+
+---
+
 ## 5. AI를 사용하지 않은 판단 영역
 
 - **1순위 페인포인트 결정** (액션아이템 누락 > 정리 시간): 기획안 작성 시 직접 판단

@@ -13,7 +13,9 @@ import streamlit as st
 PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from src.config import DATABASE_URL
+import requests
+
+from src.config import DATABASE_URL, SLACK_WEBHOOK_URL
 from src.database import init_db
 from src.extract import extract_from_meeting
 from src.ingest import ingest_meeting
@@ -348,7 +350,7 @@ with st.sidebar:
     # 사이드바: Slack 페이로드
     # ---------------------------------------------------------------------------
 
-    st.header("Slack 알림 페이로드 (Mock)")
+    st.header("Slack 알림 페이로드")
     if df.empty:
         st.info("데이터 없음")
     else:
@@ -358,9 +360,26 @@ with st.sidebar:
         else:
             payload = _build_slack_payload(open_items)
             st.json(payload)
-            st.download_button(
-                label="JSON 다운로드",
-                data=json.dumps(payload, ensure_ascii=False, indent=2),
-                file_name="slack_payload.json",
-                mime="application/json",
-            )
+
+            col_a, col_b = st.columns(2)
+            with col_a:
+                st.download_button(
+                    label="JSON 다운로드",
+                    data=json.dumps(payload, ensure_ascii=False, indent=2),
+                    file_name="slack_payload.json",
+                    mime="application/json",
+                    use_container_width=True,
+                )
+            with col_b:
+                if SLACK_WEBHOOK_URL:
+                    if st.button("Slack으로 전송", use_container_width=True, type="primary"):
+                        try:
+                            res = requests.post(SLACK_WEBHOOK_URL, json=payload, timeout=5)
+                            if res.status_code == 200:
+                                st.success("Slack 전송 완료!")
+                            else:
+                                st.error(f"전송 실패: {res.status_code}")
+                        except Exception as e:
+                            st.error(f"전송 오류: {e}")
+                else:
+                    st.caption("SLACK_WEBHOOK_URL 미설정")

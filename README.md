@@ -131,6 +131,16 @@ make dashboard  # Streamlit 대시보드만 실행
 make demo
 ```
 
+### Slack 실제 전송
+
+`.env` 파일에 `SLACK_WEBHOOK_URL`을 추가하면 대시보드 사이드바에 **"Slack으로 전송"** 버튼이 활성화됩니다.
+
+```
+SLACK_WEBHOOK_URL=https://hooks.slack.com/services/...
+```
+
+버튼 클릭 시 미완료(open) 액션아이템 전체가 Slack Block Kit 형식으로 지정 채널에 전송됩니다.
+
 ### 음성 파일 STT (WhisperX — 가산점 경로)
 
 ```bash
@@ -171,7 +181,7 @@ make dashboard
 | 섹션 | 내용 |
 |---|---|
 | **새 회의 업로드** | JSON 업로드 → 화자 이름 수정 → 파이프라인 실행 버튼 |
-| **Slack 알림 페이로드** | 미완료 항목 JSON 미리보기 + 다운로드 |
+| **Slack 알림 페이로드** | 미완료 항목 JSON 미리보기 + 다운로드 + 실제 Slack 전송 |
 
 업로드 흐름:
 ```
