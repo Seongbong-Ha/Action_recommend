@@ -19,6 +19,7 @@ SELECT
     ai.source_utterance_id,
     ai.source_quote,
     ai.is_ambiguous,
+    ai.related_campaign,
     ai.status,
     ai.extracted_at
 FROM action_items ai

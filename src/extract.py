@@ -22,6 +22,7 @@ class ActionItemSchema(BaseModel):
     confidence: float = Field(..., ge=0.0, le=1.0)
     source_quote: str
     is_ambiguous: bool = False
+    related_campaign: Optional[str] = None
 
     @field_validator("confidence")
     @classmethod
@@ -67,6 +68,7 @@ _MOCK_ACTION_ITEMS_RAW = [
         "confidence": 0.95,
         "source_quote": "제가 6월 3일까지 캠페인 세팅 완료하겠습니다.",
         "is_ambiguous": False,
+        "related_campaign": "구글 SA",
     },
     {
         "content": "카카오 DA 성과 리포트 광고주 발송",
@@ -76,6 +78,7 @@ _MOCK_ACTION_ITEMS_RAW = [
         "confidence": 0.93,
         "source_quote": "오후 3시까지 무조건 발송하겠습니다.",
         "is_ambiguous": False,
+        "related_campaign": "카카오 DA",
     },
     {
         "content": "광고 소재 검수 결과 확인 후 김민지에게 전달",
@@ -85,6 +88,7 @@ _MOCK_ACTION_ITEMS_RAW = [
         "confidence": 0.90,
         "source_quote": "피드백 받는 즉시 공유하겠습니다.",
         "is_ambiguous": False,
+        "related_campaign": None,
     },
     {
         "content": "신규 광고주 온보딩 미팅 일정 조율 및 공유",
@@ -94,6 +98,7 @@ _MOCK_ACTION_ITEMS_RAW = [
         "confidence": 0.82,
         "source_quote": "이번 주 안으로 일정 조율해서 공유하겠습니다.",
         "is_ambiguous": False,
+        "related_campaign": None,
     },
 ]
 
@@ -129,10 +134,12 @@ _NOISE_INSTRUCTIONS = """[잡음 처리 지침]
 - "알겠습니다", "네, 맞습니다" 등 단순 수긍·확인 발화는 액션아이템이 아닙니다.
 - R&R이 여러 발화에 걸쳐 협의될 때는 최종 명시적 확인 발화를 근거로 삼으세요.
 - 담당자가 불명확하면 assignee를 null, is_ambiguous를 true로 설정하세요 (강제 추측 금지).
+- 단, 화자가 "제가 ~담당이니까", "~팀에서 처리해야 해서" 등 직무·역할 맥락으로 자신이 담당임을 암묵적으로 확인하면 assignee로 인정하세요.
 - 기한이 명시되지 않으면 due_date를 null, due_is_inferred를 false로 설정하세요.
-- "이번 주 안으로", "곧" 같은 상대적 기한은 due_is_inferred를 true로 표시하세요."""
+- "이번 주 안으로", "곧", "이번 주 금요일까지" 같은 상대적 기한은 due_is_inferred를 true로 표시하세요.
+- related_campaign은 발화에서 직접 언급된 캠페인명(예: 구글 SA, 카카오 DA, 네이버 SA)만 추출하고, 언급이 없으면 null로 설정하세요."""
 
-_FEW_SHOT = """[few-shot 예시 — R&R 핑퐁 처리]
+_FEW_SHOT = """[few-shot 예시 1 — R&R 핑퐁: 명시적 최종 확인을 assignee 근거로 사용]
 발화 흐름:
   A: "이 건 누가 담당하죠?"
   B: "저도 괜찮은데..."
@@ -145,9 +152,52 @@ _FEW_SHOT = """[few-shot 예시 — R&R 핑퐁 처리]
   "due_is_inferred": false,
   "confidence": 0.88,
   "source_quote": "제가 챙길게요. 내일 오후까지 완료하겠습니다.",
-  "is_ambiguous": false
+  "is_ambiguous": false,
+  "related_campaign": null
 }
-→ 핵심: 최종 명시적 확인 발화(C)를 assignee와 source_quote 근거로 사용"""
+→ 핵심: 최종 명시적 확인 발화(C)를 assignee와 source_quote 근거로 사용
+
+[few-shot 예시 2 — 암묵적 담당자: 직무·역할 맥락 기반 추론]
+발화 흐름:
+  매니저: "카카오 DA 소재 성과 데이터 정리가 필요한데요."
+  김민지: "제가 DA 성과 분석 담당이니까 오늘 EOD까지 정리해드릴게요."
+올바른 추출:
+{
+  "content": "카카오 DA 소재 성과 데이터 정리",
+  "assignee": "김민지",
+  "due_date": "회의 당일 날짜",
+  "due_is_inferred": false,
+  "confidence": 0.91,
+  "source_quote": "제가 DA 성과 분석 담당이니까 오늘 EOD까지 정리해드릴게요.",
+  "is_ambiguous": false,
+  "related_campaign": "카카오 DA"
+}
+→ 핵심: "제가 ~담당이니까" 문맥으로 암묵적 R&R 확인. 발화에서 언급된 캠페인명 추출
+
+[few-shot 예시 3 — 단순 수긍 필터링: 확인·동의 발화는 액션아이템 아님]
+발화 흐름:
+  A: "구글 SA 예산 30% 증액으로 확정됐죠?"
+  B: "네, 맞습니다."
+  C: "알겠습니다."
+올바른 추출: [] (빈 배열)
+→ 핵심: 확인·동의 발화는 태스크가 아님. 아래처럼 추출하면 잘못된 결과:
+  WRONG: {"content": "구글 SA 예산 증액 확인", "assignee": "B", ...}
+
+[few-shot 예시 4 — 상대적 기한 + related_campaign 추출]
+발화 흐름:
+  홍길동: "네이버 SA A/B 테스트 결과를 이번 주 금요일까지 정리해서 공유드릴게요."
+올바른 추출:
+{
+  "content": "네이버 SA A/B 테스트 결과 정리 및 공유",
+  "assignee": "홍길동",
+  "due_date": null,
+  "due_is_inferred": true,
+  "confidence": 0.92,
+  "source_quote": "네이버 SA A/B 테스트 결과를 이번 주 금요일까지 정리해서 공유드릴게요.",
+  "is_ambiguous": false,
+  "related_campaign": "네이버 SA"
+}
+→ 핵심: "이번 주 금요일"은 due_is_inferred=true (회의 날짜 기준 추론 필요). related_campaign은 발화에서 직접 언급된 캠페인명만 추출"""
 
 
 def _build_action_items_prompt(utterances_text: str, meeting_date: str, error_hint: str = "") -> str:
@@ -171,7 +221,8 @@ def _build_action_items_prompt(utterances_text: str, meeting_date: str, error_hi
       "due_is_inferred": false,
       "confidence": 0.0~1.0,
       "source_quote": "근거 발화 원문 (그대로 인용)",
-      "is_ambiguous": false
+      "is_ambiguous": false,
+      "related_campaign": "캠페인명 또는 null"
     }}
   ]
 }}
@@ -279,8 +330,8 @@ def _upsert_action_items(meeting_id: str, items: list[ActionItemSchema], utteran
                 INSERT INTO action_items_raw
                     (action_item_id, meeting_id, content, assignee, due_date,
                      due_is_inferred, confidence, source_utterance_id, source_quote,
-                     is_ambiguous, status, extracted_at)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'open', %s)
+                     is_ambiguous, related_campaign, status, extracted_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'open', %s)
                 ON CONFLICT (action_item_id) DO UPDATE SET
                     content             = EXCLUDED.content,
                     assignee            = EXCLUDED.assignee,
@@ -290,6 +341,7 @@ def _upsert_action_items(meeting_id: str, items: list[ActionItemSchema], utteran
                     source_utterance_id = EXCLUDED.source_utterance_id,
                     source_quote        = EXCLUDED.source_quote,
                     is_ambiguous        = EXCLUDED.is_ambiguous,
+                    related_campaign    = EXCLUDED.related_campaign,
                     extracted_at        = EXCLUDED.extracted_at
                 """,
                 (
@@ -303,6 +355,7 @@ def _upsert_action_items(meeting_id: str, items: list[ActionItemSchema], utteran
                     source_utterance_id,
                     item.source_quote,
                     item.is_ambiguous,
+                    item.related_campaign,
                     now,
                 ),
             )

@@ -48,6 +48,10 @@ DDL_STATEMENTS = [
         ON action_items_raw (meeting_id)
     """,
     """
+    ALTER TABLE action_items_raw
+        ADD COLUMN IF NOT EXISTS related_campaign VARCHAR
+    """,
+    """
     CREATE TABLE IF NOT EXISTS raw_minutes (
         meeting_id      VARCHAR PRIMARY KEY,
         summary         TEXT NOT NULL,

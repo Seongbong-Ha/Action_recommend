@@ -66,6 +66,23 @@ def test_content_required():
         ActionItemSchema(confidence=0.9, source_quote="발화")
 
 
+def test_related_campaign_nullable():
+    """related_campaign 은 None 허용 — 캠페인 미언급 케이스."""
+    item = ActionItemSchema(content="테스트", confidence=0.9, source_quote="발화", related_campaign=None)
+    assert item.related_campaign is None
+
+
+def test_related_campaign_extracted():
+    """related_campaign 에 캠페인명이 설정되면 그대로 보존되어야 한다."""
+    item = ActionItemSchema(
+        content="카카오 DA 소재 성과 데이터 정리",
+        confidence=0.91,
+        source_quote="제가 DA 성과 분석 담당이니까 오늘 EOD까지 정리해드릴게요.",
+        related_campaign="카카오 DA",
+    )
+    assert item.related_campaign == "카카오 DA"
+
+
 # ---------------------------------------------------------------------------
 # MinutesSummarySchema 유효성 검사
 # ---------------------------------------------------------------------------

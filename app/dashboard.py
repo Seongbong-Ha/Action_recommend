@@ -50,7 +50,7 @@ def load_action_items() -> pd.DataFrame:
             cur.execute(
                 "SELECT action_item_id, meeting_id, meeting_title, meeting_date, "
                 "content, assignee, due_date, due_is_inferred, confidence, "
-                "source_quote, is_ambiguous, status, extracted_at "
+                "source_quote, is_ambiguous, related_campaign, status, extracted_at "
                 "FROM mart_action_items ORDER BY extracted_at DESC"
             )
             rows = cur.fetchall()
@@ -105,18 +105,27 @@ def _build_slack_payload(open_items: pd.DataFrame) -> dict:
     ]
     for _, row in open_items.iterrows():
         assignee = row["assignee"] if row["assignee"] else "미배정"
-        text = f"*{assignee}*: {row['content']}"
+        confidence = row.get("confidence", 1.0) or 1.0
+        conf_label = f"🔴 {confidence:.2f}" if confidence < LOW_CONFIDENCE_THRESHOLD else f"🟢 {confidence:.2f}"
+        text = f"*{assignee}*: {row['content']}  {conf_label}"
         if row.get("due_date"):
-            text += f"  (기한: {row['due_date']})"
+            inferred = " _(추론)_" if row.get("due_is_inferred") else ""
+            text += f"  (기한: {row['due_date']}{inferred})"
+        if row.get("related_campaign"):
+            text += f"  [{row['related_campaign']}]"
         if row.get("is_ambiguous"):
             text += "  ⚠️ 담당자 불명확"
         blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": text}})
 
+    low_conf_count = int((open_items.get("confidence", pd.Series(dtype=float)) < LOW_CONFIDENCE_THRESHOLD).sum())
+    summary = f"총 {len(open_items)}건 미완료"
+    if low_conf_count:
+        summary += f"  |  🔴 낮은 신뢰도 {low_conf_count}건 검수 필요"
     blocks.append({"type": "divider"})
     blocks.append(
         {
             "type": "context",
-            "elements": [{"type": "mrkdwn", "text": f"총 {len(open_items)}건 미완료"}],
+            "elements": [{"type": "mrkdwn", "text": summary}],
         }
     )
     return {"blocks": blocks}
@@ -178,11 +187,19 @@ if df.empty:
 # ---------------------------------------------------------------------------
 
 if not df.empty:
-    col1, col2, col3, col4 = st.columns(4)
+    _today = pd.Timestamp.today().normalize()
+    _overdue_count = int(
+        (
+            (df["status"] == "open")
+            & (pd.to_datetime(df["due_date"], errors="coerce") < _today)
+        ).sum()
+    )
+    col1, col2, col3, col4, col5 = st.columns(5)
     col1.metric("전체", len(df))
     col2.metric("Open", len(df[df["status"] == "open"]))
     col3.metric("Done", len(df[df["status"] == "done"]))
     col4.metric("Blocked", len(df[df["status"] == "blocked"]))
+    col5.metric("기한 초과", _overdue_count)
 
     # ---------------------------------------------------------------------------
     # 섹션 1: 회의·액션아이템 발생 추이
@@ -219,16 +236,33 @@ if not df.empty:
         st.bar_chart(top_assignee)
 
     # ---------------------------------------------------------------------------
-    # 섹션 3: 캠페인/광고주별 반복 이슈 키워드
+    # 섹션 3: 캠페인별 미완료 건수
     # ---------------------------------------------------------------------------
 
-    st.subheader("캠페인/광고주별 반복 이슈 키워드")
-    campaigns = df["meeting_title"].dropna().unique()
-    if len(campaigns) == 0:
-        st.info("키워드 데이터 없음")
+    st.subheader("캠페인별 미완료 건수")
+    if open_df.empty:
+        st.info("미완료 항목 없음")
     else:
-        for campaign in campaigns:
-            contents = df[df["meeting_title"] == campaign]["content"].tolist()
+        campaign_counts = (
+            open_df["related_campaign"].fillna("미연결")
+            .value_counts()
+            .rename_axis("캠페인")
+            .reset_index(name="미완료 건수")
+            .set_index("캠페인")
+        )
+        st.bar_chart(campaign_counts)
+
+    # ---------------------------------------------------------------------------
+    # 섹션 4: 캠페인/광고주별 반복 이슈 키워드
+    # ---------------------------------------------------------------------------
+
+    st.subheader("캠페인별 반복 이슈 키워드")
+    campaign_groups = df["related_campaign"].dropna().unique()
+    if len(campaign_groups) == 0:
+        st.info("캠페인 정보 없음 (related_campaign 미추출)")
+    else:
+        for campaign in campaign_groups:
+            contents = df[df["related_campaign"] == campaign]["content"].tolist()
             keywords = _extract_keywords(contents, top_n=TOP_N_KEYWORDS)
             if keywords:
                 with st.expander(f"{campaign}", expanded=True):
@@ -238,7 +272,7 @@ if not df.empty:
                     st.bar_chart(kw_df)
 
     # ---------------------------------------------------------------------------
-    # 섹션 4: confidence 분포 + 저신뢰도 드릴다운
+    # 섹션 5: confidence 분포 + 저신뢰도 드릴다운
     # ---------------------------------------------------------------------------
 
     st.subheader(f"LLM 추출 신뢰도 분포 (confidence)")
@@ -271,7 +305,32 @@ if not df.empty:
         )
 
     # ---------------------------------------------------------------------------
-    # 섹션 5: 주요 의사결정
+    # 섹션 6: 기한 초과 현황
+    # ---------------------------------------------------------------------------
+
+    st.subheader("기한 초과 현황")
+    overdue_df = df[
+        (df["status"] == "open")
+        & (pd.to_datetime(df["due_date"], errors="coerce") < _today)
+    ].copy()
+    if overdue_df.empty:
+        st.info("기한 초과 항목 없음")
+    else:
+        st.warning(f"기한 초과 {len(overdue_df)}건 — 즉시 확인 필요")
+        display_cols = ["content", "assignee", "due_date", "confidence", "related_campaign", "status"]
+        overdue_display = overdue_df[display_cols].rename(columns={
+            "content": "내용", "assignee": "담당자", "due_date": "기한",
+            "confidence": "신뢰도", "related_campaign": "캠페인", "status": "상태",
+        })
+        overdue_display["담당자"] = overdue_display["담당자"].fillna("미배정")
+        st.dataframe(
+            overdue_display,
+            use_container_width=True,
+            column_config={"신뢰도": st.column_config.NumberColumn(format="%.2f")},
+        )
+
+    # ---------------------------------------------------------------------------
+    # 섹션 7: 주요 의사결정
     # ---------------------------------------------------------------------------
 
     st.subheader("주요 의사결정")
