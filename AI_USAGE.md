@@ -259,6 +259,24 @@
 
 ---
 
+### [잔존 이슈 수정 — update_v2 기반]
+
+**AI가 수행한 작업**
+- `requirements.txt`: `requests`, `pytest` 추가 (Slack 전송 런타임 오류 방지, unit test 실행 보호)
+- `docker-compose.yml`: `POSTGRES_PASSWORD` 하드코딩 → `.env` 환경변수 참조로 교체
+- `README.md`: real 모드 멱등성 한계 가정 사항에 명시
+- `tests/test_extract_validation.py`: LLM 신뢰화 핵심 로직 unit test 10개 작성
+  - pydantic 스키마 boundary 검증, confidence 반올림, assignee=None, is_ambiguous 보존
+  - 3회 재시도 후 confidence=0 폴백 경로 (monkeypatch)
+  - 2회차 성공 시 정상 반환 경로 (monkeypatch)
+- `Makefile`: `make test-unit` 타겟 추가
+
+**직접 개입한 판단**
+- Antigravity 코드 리뷰(update_v2.md)를 검토하여 이미 처리된 항목([A][C][D][F][I]) 확인 후 미처리 항목만 선별
+- unit test 항목: AI 초안에 `_extract_action_items` import가 unused로 표시됐으나, 폴백 테스트가 내부적으로 호출하므로 유지 결정
+
+---
+
 ### [Slack 실제 전송 연동]
 
 **AI가 수행한 작업**
