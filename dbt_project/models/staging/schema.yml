@@ -1,5 +1,11 @@
 version: 2
 
+sources:
+  - name: public
+    schema: public
+    tables:
+      - name: raw_utterances
+
 models:
   - name: stg_utterances
     description: "화자 정규화, 잡음 제거, 중복 발화 제거된 정제 발화 뷰"

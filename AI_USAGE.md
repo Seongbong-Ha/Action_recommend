@@ -66,12 +66,17 @@
 
 ---
 
-### 사례 4 — profiles.yml 보안 처리 방식 결정
+### 사례 4 — profiles.yml 보안 처리 방식 결정 (1차 → 2차 수정)
 
-**AI 피드백**: "`profiles.yml`을 레포 안에 두면 DB 접속 정보가 git에 올라갈 수 있다"고 지적  
-**직접 결정**: `~/.dbt/profiles.yml` 전역 경로 대신, 레포 안에 두되 `.gitignore`로 차단 + `--profiles-dir ./dbt_project` 옵션으로 dbt 실행하는 방식 선택
+**1차 결정**: `~/.dbt/profiles.yml` 전역 경로 대신, 레포 안에 두되 `.gitignore`로 차단하는 방식 선택  
+**문제 발견**: 실제 `.gitignore`에 `dbt_project/profiles.yml` 항목이 누락되어 있었고, 비밀번호가 평문으로 하드코딩된 채 커밋된 상태였음. 문서와 실제 상태가 불일치.
 
-**수정 이유**: 전역 경로 방식은 협업자가 별도로 파일을 만들어야 하는 온보딩 비용이 생김. PoC 단독 실행 환경에서는 레포 안에서 관리하되 git 차단하는 방식이 실행 편의성과 보안을 동시에 잡는다고 판단.
+**2차 수정 (코드 리뷰 후)**:
+- `profiles.yml`을 `env_var()` 기반으로 전면 수정 (하드코딩 제거)
+- `.gitignore`에 `dbt_project/profiles.yml` 추가
+- `dbt_project/profiles.example.yml` 생성 (온보딩 가이드)
+
+**교훈**: 문서에 "gitignore로 차단"이라고 썼으면 실제 .gitignore 파일을 열어 항목이 있는지 반드시 확인해야 함.
 
 ---
 

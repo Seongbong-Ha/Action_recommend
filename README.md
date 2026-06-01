@@ -98,12 +98,12 @@ Action_recommend/
 ### 사전 준비
 
 ```bash
-# 1. Postgres 컨테이너 실행
-docker-compose up -d
+# 1. 환경변수 설정
+cp .env.example .env          # POSTGRES_USER, POSTGRES_PASSWORD, GEMINI_API_KEY 입력
+cp dbt_project/profiles.example.yml dbt_project/profiles.yml
 
-# 2. 패키지 설치 및 dbt 패키지 설치
-pip install -r requirements.txt
-dbt deps --project-dir dbt_project --profiles-dir dbt_project
+# 2. Postgres 컨테이너 실행 + 패키지 설치
+make setup
 ```
 
 ### 파이프라인 실행
