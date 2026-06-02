@@ -1,6 +1,6 @@
 import hashlib
 import json
-from datetime import datetime, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from typing import Optional
 
 from src.database import get_cursor, init_db
@@ -15,6 +15,27 @@ def _utterance_id(meeting_id: str, speaker: str, timestamp: Optional[str], conte
     ts = timestamp if timestamp is not None else ""
     raw = f"{meeting_id}:{speaker}:{ts}:{content}"
     return _hash(raw)
+
+
+def coerce_utterance_timestamp(
+    timestamp: Optional[str],
+    meeting_date: str,
+) -> Optional[datetime]:
+    if timestamp is None:
+        return None
+
+    value = str(timestamp).strip()
+    if not value:
+        return None
+
+    try:
+        offset_seconds = float(value)
+    except ValueError:
+        normalized_value = value.replace("Z", "+00:00")
+        return datetime.fromisoformat(normalized_value)
+
+    base_date = date.fromisoformat(meeting_date)
+    return datetime.combine(base_date, time.min) + timedelta(seconds=offset_seconds)
 
 
 def ingest_meeting(meeting: Meeting) -> None:
@@ -51,7 +72,7 @@ def ingest_meeting(meeting: Meeting) -> None:
                     meeting.meeting_id,
                     utt.speaker,
                     utt.content,
-                    utt.timestamp,
+                    coerce_utterance_timestamp(utt.timestamp, meeting.date),
                     datetime.now(timezone.utc),
                 ),
             )

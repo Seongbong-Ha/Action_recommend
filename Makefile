@@ -1,4 +1,4 @@
-.PHONY: setup run test dashboard demo all
+.PHONY: setup run test test-unit evaluate reset-data dashboard demo all
 
 ifneq (,$(wildcard .env))
   include .env
@@ -27,9 +27,16 @@ test:
 test-unit:
 	$(PYTHON) -m pytest tests/ -v
 
-dashboard:
+evaluate:
+	$(PYTHON) -m src.evaluate
+
+reset-data:
+	$(PYTHON) -c "from src.database import reset_db; reset_db()"
+
+dashboard: reset-data
 	$(STREAMLIT) run app/dashboard.py
 
-demo: run dashboard
+demo: run
+	$(STREAMLIT) run app/dashboard.py
 
 all: setup run test

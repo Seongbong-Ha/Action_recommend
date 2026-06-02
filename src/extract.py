@@ -85,6 +85,73 @@ def _match_utterance_id(source_quote: str, utterances: list[dict]) -> Optional[s
     return best_id if best_score >= 0.6 else None
 
 
+_CAMPAIGN_CONTEXT_PATTERN = re.compile(
+    r"([가-힣A-Za-z0-9][가-힣A-Za-z0-9_-]*(?:\s+[가-힣A-Za-z0-9][가-힣A-Za-z0-9_-]*){0,2}\s+캠페인)"
+)
+
+_CAMPAIGN_CONTEXT_STOP_PREFIXES = {
+    "오늘은",
+    "이번에는",
+    "일단",
+    "그게",
+    "지난",
+    "저번",
+    "이번",
+}
+
+_GENERIC_CAMPAIGN_REFERENCES = {
+    "지난 캠페인",
+    "저번 캠페인",
+    "이번 캠페인",
+}
+
+
+def _normalize_campaign_candidate(candidate: str) -> Optional[str]:
+    words = candidate.strip(" ,.…").split()
+    while len(words) > 2 and words[0] in _CAMPAIGN_CONTEXT_STOP_PREFIXES:
+        words = words[1:]
+
+    normalized = " ".join(words)
+    if normalized in _GENERIC_CAMPAIGN_REFERENCES:
+        return None
+    if any(generic in normalized for generic in _GENERIC_CAMPAIGN_REFERENCES):
+        return None
+
+    normalized = normalized.replace("다음 빨 캠페인", "다음달 캠페인")
+    normalized = normalized.replace("다음 달 캠페인", "다음달 캠페인")
+    return normalized or None
+
+
+def _infer_default_campaign(utterances: list[dict], max_utterances: int = 5) -> Optional[str]:
+    candidates = []
+    for utt in utterances[:max_utterances]:
+        for match in _CAMPAIGN_CONTEXT_PATTERN.finditer(utt["content"]):
+            candidate = _normalize_campaign_candidate(match.group(1))
+            if candidate:
+                candidates.append(candidate)
+
+    unique_candidates = list(dict.fromkeys(candidates))
+    if len(unique_candidates) == 1:
+        return unique_candidates[0]
+    return None
+
+
+def _apply_default_campaign(
+    items: list[ActionItemSchema],
+    utterances: list[dict],
+) -> list[ActionItemSchema]:
+    default_campaign = _infer_default_campaign(utterances)
+    if not default_campaign:
+        return items
+
+    return [
+        item if item.related_campaign else item.model_copy(
+            update={"related_campaign": default_campaign}
+        )
+        for item in items
+    ]
+
+
 # ---------------------------------------------------------------------------
 # Mock LLM (기본값 — 결정론적, 외부 호출 0건)
 # ---------------------------------------------------------------------------
@@ -418,9 +485,12 @@ def _extract_minutes(utterances_text: str) -> MinutesSummarySchema:
 
 def _upsert_action_items(meeting_id: str, items: list[ActionItemSchema], utterances: list[dict]) -> None:
     now = datetime.now(timezone.utc)
+    current_action_item_ids = [
+        _hash(f"{meeting_id}:{_normalize_content(item.content)}")
+        for item in items
+    ]
     with get_cursor(commit=True) as cur:
-        for item in items:
-            action_item_id = _hash(f"{meeting_id}:{_normalize_content(item.content)}")
+        for action_item_id, item in zip(current_action_item_ids, items):
             source_utterance_id = _match_utterance_id(item.source_quote, utterances)
             cur.execute(
                 """
@@ -456,6 +526,14 @@ def _upsert_action_items(meeting_id: str, items: list[ActionItemSchema], utteran
                     now,
                 ),
             )
+        cur.execute(
+            """
+            DELETE FROM raw_action_items
+            WHERE meeting_id = %s
+              AND NOT (action_item_id = ANY(%s))
+            """,
+            (meeting_id, current_action_item_ids),
+        )
     print(f"  액션아이템 upsert 완료: {len(items)}건")
 
 
@@ -520,6 +598,7 @@ def extract_from_meeting(meeting_id: str) -> None:
     )
 
     action_items = _extract_action_items(utterances_text, meeting_date)
+    action_items = _apply_default_campaign(action_items, utterances)
     minutes = _extract_minutes(utterances_text)
 
     _upsert_action_items(meeting_id, action_items, utterances)

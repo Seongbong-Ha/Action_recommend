@@ -1,4 +1,5 @@
 import psycopg2
+from psycopg2 import sql
 from psycopg2.extras import RealDictCursor
 from contextlib import contextmanager
 from src.config import DATABASE_URL
@@ -94,6 +95,36 @@ def init_db():
         raise RuntimeError(f"DB 초기화 실패: {e}") from e
     finally:
         conn.close()
+
+
+def reset_db():
+    init_db()
+    with get_cursor(commit=True) as cur:
+        table_names = [
+            "mart_action_items",
+            "mart_minutes",
+            "raw_action_items",
+            "raw_minutes",
+            "raw_utterances",
+            "raw_meetings",
+        ]
+        cur.execute(
+            """
+            SELECT tablename
+            FROM pg_tables
+            WHERE schemaname = 'public'
+              AND tablename = ANY(%s)
+            """,
+            (table_names,),
+        )
+        existing_tables = [row["tablename"] for row in cur.fetchall()]
+        if existing_tables:
+            cur.execute(
+                sql.SQL("TRUNCATE TABLE {} RESTART IDENTITY CASCADE").format(
+                    sql.SQL(", ").join(sql.Identifier(name) for name in existing_tables)
+                )
+            )
+    print("DB 데이터 초기화 완료: raw/mart 테이블 비움")
 
 
 if __name__ == "__main__":

@@ -10,7 +10,13 @@ LLM 추출 신뢰화 핵심 로직 검증 테스트.
 import pytest
 from pydantic import ValidationError
 
-from src.extract import ActionItemSchema, MinutesSummarySchema, _extract_action_items
+from src.extract import (
+    ActionItemSchema,
+    MinutesSummarySchema,
+    _apply_default_campaign,
+    _extract_action_items,
+    _infer_default_campaign,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -81,6 +87,73 @@ def test_related_campaign_extracted():
         related_campaign="카카오 DA",
     )
     assert item.related_campaign == "카카오 DA"
+
+
+def test_infer_default_campaign_from_early_meeting_context():
+    utterances = [
+        {
+            "content": (
+                "자, 오늘은 노바드림 다음달 캠페인 전에 "
+                "정리할 게 좀 있어서 시작해볼게요."
+            )
+        },
+        {"content": "지난 캠페인 전환 수치가 좀 이상해서요."},
+    ]
+
+    assert _infer_default_campaign(utterances) == "노바드림 다음달 캠페인"
+
+
+def test_infer_default_campaign_tolerates_stt_typo_and_generic_reference():
+    utterances = [
+        {
+            "content": (
+                "오늘은 노바드림 다음 빨 캠페인 전에 정리할게 좀 있어서 "
+                "시작해 볼게요."
+            )
+        },
+        {
+            "content": (
+                "지난 캠페인 전환 수치가 좀 이상해서요. "
+                "메타랑 GA 숫자가 안 맞아요."
+            )
+        },
+    ]
+
+    assert _infer_default_campaign(utterances) == "노바드림 다음달 캠페인"
+
+
+def test_apply_default_campaign_only_when_item_campaign_is_empty():
+    utterances = [
+        {"content": "오늘은 노바드림 다음달 캠페인 준비 건을 보겠습니다."}
+    ]
+    items = [
+        ActionItemSchema(
+            content="픽셀 이벤트 중복 발화 보정",
+            confidence=0.9,
+            source_quote="픽셀 이벤트가 중복 발화되는 건 맞아 보여요.",
+            related_campaign=None,
+        ),
+        ActionItemSchema(
+            content="구글 SA 예산 조정",
+            confidence=0.9,
+            source_quote="구글 SA 예산을 조정하겠습니다.",
+            related_campaign="구글 SA",
+        ),
+    ]
+
+    result = _apply_default_campaign(items, utterances)
+
+    assert result[0].related_campaign == "노바드림 다음달 캠페인"
+    assert result[1].related_campaign == "구글 SA"
+
+
+def test_infer_default_campaign_returns_none_when_multiple_candidates():
+    utterances = [
+        {"content": "노바드림 다음달 캠페인 먼저 보고요."},
+        {"content": "그리고 카카오 DA 캠페인도 따로 봐야 합니다."},
+    ]
+
+    assert _infer_default_campaign(utterances) is None
 
 
 # ---------------------------------------------------------------------------

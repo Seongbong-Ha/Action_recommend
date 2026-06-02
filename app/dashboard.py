@@ -2,6 +2,7 @@ import json
 import subprocess
 import sys
 import tempfile
+import time
 from collections import Counter
 from pathlib import Path
 
@@ -15,8 +16,9 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 import requests
 
+from src.action_items import update_action_item_status
 from src.config import DATABASE_URL, SLACK_WEBHOOK_URL
-from src.database import init_db
+from src.database import reset_db
 from src.extract import extract_from_meeting
 from src.ingest import ingest_meeting
 from src.transcriber import AUDIO_EXTENSIONS, FileTranscriber, WhisperTranscriber
@@ -24,6 +26,7 @@ from src.transcriber import AUDIO_EXTENSIONS, FileTranscriber, WhisperTranscribe
 LOW_CONFIDENCE_THRESHOLD = 0.7
 TOP_N_ASSIGNEE = 5
 TOP_N_KEYWORDS = 10
+STATUS_OPTIONS = ["open", "done", "blocked"]
 
 STOPWORDS = {
     "이", "가", "을", "를", "은", "는", "의", "에", "에서", "으로", "로",
@@ -152,29 +155,66 @@ def _dbt_run(select: str) -> bool:
     return result.returncode == 0
 
 
+def _run_status_step(label: str, fn):
+    started_at = time.monotonic()
+    st.write(f"{label} 시작")
+    result = fn()
+    elapsed = time.monotonic() - started_at
+    st.write(f"{label} 완료 ({elapsed:.1f}s)")
+    return result
+
+
 def _run_pipeline(meeting, speaker_map: dict):
     for utt in meeting.utterances:
         utt.speaker = speaker_map.get(utt.speaker, utt.speaker)
 
     with st.status("파이프라인 실행 중...", expanded=True) as status:
-        st.write("① DB 초기화")
-        init_db()
-        st.write("② 발화 적재 (ingest)")
-        ingest_meeting(meeting)
-        st.write("③ dbt staging")
-        if not _dbt_run("staging"):
+        status.update(label="1/5 DB 초기화 및 기존 데이터 삭제 중...", state="running")
+        _run_status_step("1/5 DB 초기화 및 기존 데이터 삭제", reset_db)
+
+        status.update(label="2/5 발화 적재 중...", state="running")
+        _run_status_step(
+            f"2/5 발화 적재 ({len(meeting.utterances)}개)",
+            lambda: ingest_meeting(meeting),
+        )
+
+        status.update(label="3/5 dbt staging 실행 중...", state="running")
+        if not _run_status_step("3/5 dbt staging", lambda: _dbt_run("staging")):
             status.update(label="dbt staging 실패", state="error")
             return
-        st.write("④ LLM 추출 (extract)")
-        extract_from_meeting(meeting.meeting_id)
-        st.write("⑤ dbt marts")
-        if not _dbt_run("marts"):
+
+        status.update(label="4/5 LLM 추출 중...", state="running")
+        _run_status_step(
+            f"4/5 LLM 추출 ({meeting.meeting_id})",
+            lambda: extract_from_meeting(meeting.meeting_id),
+        )
+
+        status.update(label="5/5 dbt marts 실행 중...", state="running")
+        if not _run_status_step("5/5 dbt marts", lambda: _dbt_run("marts")):
             status.update(label="dbt marts 실패", state="error")
             return
-        status.update(label="완료!", state="complete")
+        status.update(label="파이프라인 완료", state="complete")
 
     st.cache_data.clear()
     st.rerun()
+
+
+def _sync_marts_after_status_update() -> bool:
+    return _dbt_run("marts")
+
+
+def _save_status_updates(original_df: pd.DataFrame, edited_df: pd.DataFrame) -> int:
+    updated_count = 0
+    edited_rows = edited_df.reset_index(drop=True)
+    original_rows = original_df.reset_index(drop=True)
+    for index, row in edited_rows.iterrows():
+        action_item_id = original_rows.at[index, "action_item_id"]
+        original_status = original_rows.at[index, "status"]
+        next_status = row["status"]
+        if next_status != original_status:
+            update_action_item_status(action_item_id, next_status)
+            updated_count += 1
+    return updated_count
 
 
 # ---------------------------------------------------------------------------
@@ -339,7 +379,60 @@ if not df.empty:
         )
 
     # ---------------------------------------------------------------------------
-    # 섹션 7: 주요 의사결정
+    # 섹션 7: 액션아이템 상태 업데이트
+    # ---------------------------------------------------------------------------
+
+    st.subheader("액션아이템 상태 업데이트")
+    status_cols = [
+        "action_item_id", "content", "assignee", "due_date",
+        "related_campaign", "confidence", "status",
+    ]
+    status_df = df[status_cols].copy()
+    status_df["assignee"] = status_df["assignee"].fillna("미배정")
+    status_df["related_campaign"] = status_df["related_campaign"].fillna("미연결")
+
+    status_display_df = status_df.drop(columns=["action_item_id"])
+    edited_status_df = st.data_editor(
+        status_display_df,
+        use_container_width=True,
+        hide_index=True,
+        column_order=[
+            "content", "assignee", "due_date",
+            "related_campaign", "confidence", "status",
+        ],
+        disabled=[
+            "content", "assignee", "due_date",
+            "related_campaign", "confidence",
+        ],
+        column_config={
+            "content": st.column_config.TextColumn("내용"),
+            "assignee": st.column_config.TextColumn("담당자"),
+            "due_date": st.column_config.DateColumn("기한"),
+            "related_campaign": st.column_config.TextColumn("캠페인"),
+            "confidence": st.column_config.NumberColumn("신뢰도", format="%.2f"),
+            "status": st.column_config.SelectboxColumn(
+                "상태",
+                options=STATUS_OPTIONS,
+                required=True,
+            ),
+        },
+        key="action_item_status_editor",
+    )
+
+    if st.button("상태 변경 저장", type="primary"):
+        try:
+            updated_count = _save_status_updates(status_df, edited_status_df)
+            if updated_count == 0:
+                st.info("변경된 상태가 없습니다.")
+            elif _sync_marts_after_status_update():
+                st.success(f"상태 {updated_count}건 저장 완료")
+                st.cache_data.clear()
+                st.rerun()
+        except Exception as e:
+            st.error(f"상태 저장 실패: {e}")
+
+    # ---------------------------------------------------------------------------
+    # 섹션 8: 주요 의사결정
     # ---------------------------------------------------------------------------
 
     st.subheader("주요 의사결정")
@@ -371,8 +464,20 @@ with st.sidebar:
     )
 
     if uploaded_file is not None:
-        file_key = uploaded_file.name
-        suffix = Path(file_key).suffix.lower()
+        suffix = Path(uploaded_file.name).suffix.lower()
+        expected_speaker_count = None
+        if suffix in AUDIO_EXTENSIONS:
+            speaker_count_hint = st.number_input(
+                "예상 화자 수 (0=자동 추정)",
+                min_value=0,
+                max_value=10,
+                value=3,
+                step=1,
+                help="테스트 mp3는 검증용 transcript 기준 화자 3명입니다. 실제 회의에서 모르면 0으로 두세요.",
+            )
+            expected_speaker_count = int(speaker_count_hint) or None
+
+        file_key = f"{uploaded_file.name}:{expected_speaker_count or 'auto'}"
 
         if st.session_state.get("uploaded_file_name") != file_key:
             with tempfile.NamedTemporaryFile(suffix=suffix, delete=False, mode="wb") as f:
@@ -381,8 +486,32 @@ with st.sidebar:
             try:
                 if suffix in AUDIO_EXTENSIONS:
                     st.info("음성 파일 감지 — WhisperX STT + 화자 분리 실행 중... (수 분 소요)")
-                    with st.spinner("WhisperX 처리 중..."):
-                        meeting = WhisperTranscriber(model_size="base").load(tmp_path)
+                    with st.status("WhisperX 처리 준비 중...", expanded=True) as audio_status:
+                        audio_started_at = time.monotonic()
+
+                        def show_audio_progress(message: str) -> None:
+                            elapsed = time.monotonic() - audio_started_at
+                            audio_status.update(
+                                label=f"WhisperX 처리 중... ({elapsed:.1f}s)",
+                                state="running",
+                            )
+                            st.write(f"{elapsed:.1f}s - {message}")
+
+                        meeting = WhisperTranscriber(
+                            model_size="base",
+                            expected_speaker_count=expected_speaker_count,
+                            progress_callback=show_audio_progress,
+                        ).load(tmp_path)
+                        audio_elapsed = time.monotonic() - audio_started_at
+                        audio_status.update(
+                            label=(
+                                "WhisperX 완료: "
+                                f"{len(meeting.utterances)}개 발화, "
+                                f"{len(meeting.participants)}명 화자 "
+                                f"({audio_elapsed:.1f}s)"
+                            ),
+                            state="complete",
+                        )
                 else:
                     meeting = FileTranscriber().load(tmp_path)
 

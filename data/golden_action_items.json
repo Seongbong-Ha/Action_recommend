@@ -1,0 +1,33 @@
+{
+  "meeting_id": "meet_20260601_01",
+  "action_items": [
+    {
+      "content": "구글 SA 캠페인 세팅 완료",
+      "assignee": "김민지",
+      "due_date": "2026-06-03",
+      "related_campaign": "구글 SA",
+      "source_quote": "제가 6월 3일까지 캠페인 세팅 완료하겠습니다."
+    },
+    {
+      "content": "소재 검수 결과 확인 후 김민지에게 전달",
+      "assignee": "홍길동",
+      "due_date": null,
+      "related_campaign": null,
+      "source_quote": "피드백 받는 즉시 공유하겠습니다."
+    },
+    {
+      "content": "카카오 DA 성과 리포트 광고주 발송",
+      "assignee": "김민지",
+      "due_date": "2026-06-01",
+      "related_campaign": "카카오 DA",
+      "source_quote": "오후 3시까지 무조건 발송하겠습니다."
+    },
+    {
+      "content": "신규 광고주 온보딩 미팅 일정 조율 및 공유",
+      "assignee": "홍길동",
+      "due_date": null,
+      "related_campaign": null,
+      "source_quote": "이번 주 안으로 일정 조율해서 공유하겠습니다."
+    }
+  ]
+}

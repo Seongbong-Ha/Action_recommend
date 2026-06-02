@@ -4,9 +4,17 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 AUDIO_EXTENSIONS = {".mp3", ".wav", ".m4a", ".flac", ".ogg"}
+
+
+def normalize_expected_speaker_count(value: Optional[int]) -> Optional[int]:
+    if value is None or value == 0:
+        return None
+    if value < 0:
+        raise ValueError("expected_speaker_count는 0 이상이어야 합니다.")
+    return value
 
 
 @dataclass
@@ -85,9 +93,24 @@ class FileTranscriber(BaseTranscriber):
 class WhisperTranscriber(BaseTranscriber):
     """음성 파일(mp3/wav 등) → WhisperX STT + pyannote 화자 분리 → Meeting 객체."""
 
-    def __init__(self, model_size: str = "base", device: str = "cpu"):
+    def __init__(
+        self,
+        model_size: str = "base",
+        device: str = "cpu",
+        expected_speaker_count: Optional[int] = None,
+        progress_callback: Optional[Callable[[str], None]] = None,
+    ):
         self.model_size = model_size
         self.device = device
+        self.progress_callback = progress_callback
+        self.expected_speaker_count = normalize_expected_speaker_count(
+            expected_speaker_count
+        )
+
+    def _notify(self, message: str) -> None:
+        print(f"[WhisperTranscriber] {message}")
+        if self.progress_callback:
+            self.progress_callback(message)
 
     def load(self, source: str) -> Meeting:
         try:
@@ -108,29 +131,41 @@ class WhisperTranscriber(BaseTranscriber):
         if not path.exists():
             raise FileNotFoundError(f"음성 파일을 찾을 수 없습니다: {source}")
 
-        print(f"[WhisperTranscriber] 모델 로드 중 ({self.model_size})...")
+        self._notify(f"모델 로드 중 ({self.model_size})")
         model = whisperx.load_model(self.model_size, self.device, compute_type="int8")
+        self._notify("오디오 로드 중")
         audio = whisperx.load_audio(str(path))
 
-        print("[WhisperTranscriber] 음성 인식 중...")
+        self._notify("음성 인식 중")
         result = model.transcribe(audio, batch_size=8)
         language = result.get("language", "ko")
+        self._notify(f"음성 인식 완료: {len(result.get('segments', []))}개 구간")
 
-        print("[WhisperTranscriber] 단어 정렬 중...")
+        self._notify("단어 정렬 모델 로드 중")
         model_a, metadata = whisperx.load_align_model(
             language_code=language, device=self.device
         )
+        self._notify("단어 정렬 중")
         result = whisperx.align(
             result["segments"], model_a, metadata, audio, self.device,
             return_char_alignments=False,
         )
 
-        print("[WhisperTranscriber] 화자 분리 중...")
+        self._notify("화자 분리 모델 로드 중")
         from whisperx.diarize import DiarizationPipeline
         diarize_model = DiarizationPipeline(
             token=HUGGINGFACE_TOKEN, device=self.device
         )
-        diarize_segments = diarize_model(audio)
+        diarize_kwargs = {}
+        if self.expected_speaker_count is not None:
+            diarize_kwargs = {
+                "min_speakers": self.expected_speaker_count,
+                "max_speakers": self.expected_speaker_count,
+            }
+            self._notify(f"예상 화자 수 고정: {self.expected_speaker_count}명")
+        self._notify("화자 분리 중")
+        diarize_segments = diarize_model(audio, **diarize_kwargs)
+        self._notify("단어별 화자 라벨 매핑 중")
         result = whisperx.assign_word_speakers(diarize_segments, result)
 
         # Meeting 객체로 변환
@@ -150,7 +185,7 @@ class WhisperTranscriber(BaseTranscriber):
             ))
 
         participants = sorted(set(u.speaker for u in utterances))
-        print(f"[WhisperTranscriber] 완료: {len(utterances)}개 발화, 화자 {len(participants)}명")
+        self._notify(f"완료: {len(utterances)}개 발화, 화자 {len(participants)}명")
 
         return Meeting(
             meeting_id=meeting_id,
