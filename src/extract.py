@@ -48,11 +48,33 @@ def _normalize_content(content: str) -> str:
 
 
 def _match_utterance_id(source_quote: str, utterances: list[dict]) -> Optional[str]:
-    """source_quote를 포함하거나 포함되는 utterance_id 반환."""
+    """source_quote와 utterance content를 매칭하여 utterance_id 반환.
+    1차: 원문 substring 매칭, 2차: 정규화 substring 매칭, 3차: difflib 유사도 0.6 이상 최고 점수."""
+    from difflib import SequenceMatcher
+
+    def _norm(s: str) -> str:
+        return re.sub(r"\s+", "", s.strip().lower())
+
+    norm_quote = _norm(source_quote)
+
+    # 1차: 원문 substring
     for utt in utterances:
         if source_quote in utt["content"] or utt["content"] in source_quote:
             return utt["utterance_id"]
-    return None
+
+    # 2차: 정규화 substring
+    for utt in utterances:
+        nc = _norm(utt["content"])
+        if norm_quote in nc or nc in norm_quote:
+            return utt["utterance_id"]
+
+    # 3차: 유사도 기반 fallback (0.6 임계값)
+    best_id, best_score = None, 0.0
+    for utt in utterances:
+        score = SequenceMatcher(None, norm_quote, _norm(utt["content"])).ratio()
+        if score > best_score:
+            best_score, best_id = score, utt["utterance_id"]
+    return best_id if best_score >= 0.6 else None
 
 
 # ---------------------------------------------------------------------------
@@ -98,6 +120,16 @@ _MOCK_ACTION_ITEMS_RAW = [
         "confidence": 0.82,
         "source_quote": "이번 주 안으로 일정 조율해서 공유하겠습니다.",
         "is_ambiguous": False,
+        "related_campaign": None,
+    },
+    {
+        "content": "광고 소재 방향성 재검토 및 결론 도출",
+        "assignee": None,
+        "due_date": None,
+        "due_is_inferred": False,
+        "confidence": 0.42,
+        "source_quote": "소재 방향이 좀 흐릿하게 끝난 것 같은데요.",
+        "is_ambiguous": True,
         "related_campaign": None,
     },
 ]
@@ -197,7 +229,24 @@ _FEW_SHOT = """[few-shot 예시 1 — R&R 핑퐁: 명시적 최종 확인을 ass
   "is_ambiguous": false,
   "related_campaign": "네이버 SA"
 }
-→ 핵심: "이번 주 금요일"은 due_is_inferred=true (회의 날짜 기준 추론 필요). related_campaign은 발화에서 직접 언급된 캠페인명만 추출"""
+→ 핵심: "이번 주 금요일"은 due_is_inferred=true (회의 날짜 기준 추론 필요). related_campaign은 발화에서 직접 언급된 캠페인명만 추출
+
+[few-shot 예시 5 — 지시형 발화: 팀장이 제3자에게 업무 지시하는 경우]
+발화 흐름:
+  팀장: "홍길동님이 내일 오후까지 소재 검수 결과 확인하고, 이상 없으면 바로 김민지님한테 전달해주세요."
+  홍길동: "알겠습니다. 피드백 받는 즉시 공유하겠습니다."
+올바른 추출:
+{
+  "content": "소재 검수 결과 확인 후 김민지에게 전달",
+  "assignee": "홍길동",
+  "due_date": null,
+  "due_is_inferred": true,
+  "confidence": 0.90,
+  "source_quote": "알겠습니다. 피드백 받는 즉시 공유하겠습니다.",
+  "is_ambiguous": false,
+  "related_campaign": null
+}
+→ 핵심: 팀장의 지시 발화(assignee 명시)와 홍길동의 수락 발화를 조합. source_quote는 최종 수락 발화. "내일 오후까지"는 due_is_inferred=true"""
 
 
 def _build_action_items_prompt(utterances_text: str, meeting_date: str, error_hint: str = "") -> str:
@@ -431,7 +480,7 @@ def _load_stg_utterances(meeting_id: str) -> list[dict]:
     with get_cursor() as cur:
         cur.execute(
             "SELECT utterance_id, speaker, content, timestamp "
-            "FROM stg_utterances WHERE meeting_id = %s ORDER BY timestamp",
+            "FROM stg_utterances WHERE meeting_id = %s ORDER BY timestamp NULLS LAST",
             (meeting_id,),
         )
         return [dict(row) for row in cur.fetchall()]

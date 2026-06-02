@@ -152,6 +152,9 @@ Streamlit 대시보드는 단순 데이터 열람을 넘어 **"지금 당장 누
 *   **dbt 데이터 품질 테스트**: `make test` 구동 시 stg_utterances, mart_action_items, mart_minutes의 무결성 테스트 **16/16 PASS**.
 *   **LLM 신뢰화 단위 테스트**: `make test-unit` 구동 시 Pydantic 경계값, nullability 보존, `related_campaign` 필드 검증, 3회 시도 실패 시 강제 폴백 및 2회차 성공 조기 차단 등 **12/12 PASS**.
 
+> [!NOTE]
+> **의존성 호환성 참고**: dbt-core 1.7.x는 `protobuf<5.0.0`을 요구합니다. `requirements.txt`에 버전 핀이 명시되어 있으므로 `make setup` 실행 시 자동으로 올바른 버전이 설치됩니다.
+
 ---
 
 ## 💡 가정 사항 (Assumptions)

@@ -1,6 +1,7 @@
 import hashlib
 import json
 from datetime import datetime, timezone
+from typing import Optional
 
 from src.database import get_cursor, init_db
 from src.transcriber import FileTranscriber, Meeting
@@ -10,8 +11,9 @@ def _hash(text: str) -> str:
     return hashlib.sha256(text.encode()).hexdigest()[:16]
 
 
-def _utterance_id(meeting_id: str, speaker: str, timestamp: str, content: str) -> str:
-    raw = f"{meeting_id}:{speaker}:{timestamp}:{content}"
+def _utterance_id(meeting_id: str, speaker: str, timestamp: Optional[str], content: str) -> str:
+    ts = timestamp if timestamp is not None else ""
+    raw = f"{meeting_id}:{speaker}:{ts}:{content}"
     return _hash(raw)
 
 

@@ -97,6 +97,13 @@
 
 ---
 
+### 💡 사례 11 — 코드베이스 시니어 리뷰 후 품질 개선 (Phase 2 리팩토링)
+* **AI 리뷰 수행 항목**: ① `protobuf==6.33.6`이 dbt 1.7.x와 비호환(MessageToJson 인자 제거)되어 `make run`이 dbt marts 단계에서 항상 중단되는 버그 발견 → `requirements.txt`에 `protobuf>=4.0.0,<5.0.0` 핀 추가; ② `ingest.py`의 `_utterance_id`가 `timestamp=None`일 때 `"None"` 문자열을 해시에 포함시키는 버그 → 빈 문자열로 정규화; ③ `_match_utterance_id`가 LLM이 발화를 재표현하면 NULL을 반환하는 문제 → 정규화(소문자·공백 제거) 2차 매칭 및 difflib 유사도 0.6 기반 fallback 추가; ④ mock의 confidence 값이 0.82~0.95에 몰려 드릴다운 위젯이 "저신뢰도 항목 없음"만 표시되는 문제 → confidence=0.42 테스트 케이스 1건 추가; ⑤ few-shot에 "지시형 발화(팀장이 제3자에게 업무 지시)" 패턴이 없어 LLM이 이를 처리하지 못할 수 있는 문제 → 예시 5 추가; ⑥ `extract.py` `_load_stg_utterances`의 `ORDER BY timestamp`에 `NULLS LAST` 명시적 추가.
+* **직접 개입 판단**: protobuf 버전 다운그레이드 후 google-generativeai·streamlit 호환성 확인 필요 → 패키지 임포트 테스트로 직접 검증. opentelemetry-proto dependency conflict는 streamlit 실행에 영향 없음을 확인하고 수용 판단.
+* **수정 이유**: make run이 중단되는 버그는 평가자가 파이프라인을 전혀 실행할 수 없게 하는 致命的 결함이었고, _match_utterance_id의 NULL 반환은 source_utterance_id 필드 품질을 실질적으로 저해하기 때문입니다.
+
+---
+
 ## 5. AI 도움 없이 전적으로 지원자가 직접 설계한 철학적 영역
 
 *   **비용 vs 리스크의 가치 판단**: 회의 요약 시간 단축보다 **액션아이템 누락 차단**이 광고주 마케팅 일정을 수호하는 핵심 리스크 제어 영역임을 재정의했습니다.
