@@ -124,9 +124,10 @@ make demo
 3. **`related_campaign` 필드로 캠페인 단위 추적**
    * 발화에서 언급된 캠페인명(구글 SA, 카카오 DA, 네이버 SA 등)을 LLM이 직접 추출해 `related_campaign` 컬럼에 저장합니다. 언급이 없으면 `null`로 설정하여 강제 추측을 방지합니다.
    * 이 필드를 대시보드의 캠페인별 미완료 건수 및 반복 이슈 키워드 위젯에서 그룹핑 기준으로 활용합니다.
-4. **Pydantic 2단 방어 및 3회 피드백 재시도**
-   * 타입, confidence 범위, 소스 발화 누락을 Pydantic Schema로 실시간 감시하며 에러 발생 시 `error_hint`를 동봉해 최대 3회 재시도를 요청합니다.
-   * 최종 실패 시에도 유실 방지를 위해 `confidence=0.0`, `is_ambiguous=TRUE`를 달아 검수 테이블로 안전하게 폴백(Fallback) 적재합니다.
+4. **3중 구조화 출력 보장 및 3회 피드백 재시도**
+   * **1차 (모델 레벨)**: Gemini `GenerationConfig`에 `response_schema` 파라미터를 직접 주입해, 모델이 토큰을 생성하는 시점에 JSON 스키마를 강제합니다. 이 단계에서 구조 불일치를 원천 차단합니다.
+   * **2차 (파싱 레벨)**: `json.loads` 이후 Pydantic `model_validate()`로 타입, `confidence` 범위(0.0~1.0), 필수 필드 누락을 재검증합니다. 두 레이어가 독립적으로 작동하여 어느 한쪽이 뚫려도 나머지가 막습니다.
+   * 에러 발생 시 `error_hint`를 다음 프롬프트에 `[이전 시도 오류 — 반드시 수정]` 섹션으로 동봉해 최대 3회 재시도하고, 최종 실패 시 `confidence=0.0`, `is_ambiguous=TRUE` 폴백으로 검수 테이블에 보존합니다.
 
 ---
 

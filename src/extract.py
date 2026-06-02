@@ -251,16 +251,55 @@ def _build_minutes_prompt(utterances_text: str, error_hint: str = "") -> str:
 
 
 # ---------------------------------------------------------------------------
+# Gemini 응답 스키마 (response_schema 파라미터로 모델 레벨에서 구조 강제)
+# ---------------------------------------------------------------------------
+
+_ACTION_ITEMS_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "action_items": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "content":          {"type": "string"},
+                    "assignee":         {"type": "string",  "nullable": True},
+                    "due_date":         {"type": "string",  "nullable": True},
+                    "due_is_inferred":  {"type": "boolean"},
+                    "confidence":       {"type": "number"},
+                    "source_quote":     {"type": "string"},
+                    "is_ambiguous":     {"type": "boolean"},
+                    "related_campaign": {"type": "string",  "nullable": True},
+                },
+                "required": ["content", "confidence", "source_quote", "due_is_inferred", "is_ambiguous"],
+            },
+        }
+    },
+    "required": ["action_items"],
+}
+
+_MINUTES_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "summary":   {"type": "string"},
+        "decisions": {"type": "array", "items": {"type": "string"}},
+    },
+    "required": ["summary", "decisions"],
+}
+
+
+# ---------------------------------------------------------------------------
 # Gemini 호출 (LLM_MODE=real 시만 사용)
 # ---------------------------------------------------------------------------
 
-def _call_gemini(prompt: str) -> dict:
+def _call_gemini(prompt: str, schema: dict) -> dict:
     import google.generativeai as genai
     genai.configure(api_key=GEMINI_API_KEY)
     model = genai.GenerativeModel(
         model_name="gemini-2.5-flash",
         generation_config=genai.GenerationConfig(
             response_mime_type="application/json",
+            response_schema=schema,
         ),
     )
     response = model.generate_content(prompt)
@@ -279,7 +318,7 @@ def _extract_action_items(utterances_text: str, meeting_date: str) -> list[Actio
     for attempt in range(3):
         try:
             prompt = _build_action_items_prompt(utterances_text, meeting_date, last_error)
-            raw = _call_gemini(prompt)
+            raw = _call_gemini(prompt, _ACTION_ITEMS_SCHEMA)
             return [ActionItemSchema.model_validate(item) for item in raw["action_items"]]
         except Exception as e:
             last_error = str(e)
@@ -306,7 +345,7 @@ def _extract_minutes(utterances_text: str) -> MinutesSummarySchema:
     for attempt in range(3):
         try:
             prompt = _build_minutes_prompt(utterances_text, last_error)
-            raw = _call_gemini(prompt)
+            raw = _call_gemini(prompt, _MINUTES_SCHEMA)
             return MinutesSummarySchema.model_validate(raw)
         except Exception as e:
             last_error = str(e)

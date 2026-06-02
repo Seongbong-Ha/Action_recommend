@@ -103,7 +103,7 @@ def test_fallback_on_all_retries_fail(monkeypatch):
     import src.extract as ext
 
     monkeypatch.setattr(ext, "LLM_MODE", "real")
-    monkeypatch.setattr(ext, "_call_gemini", lambda _: {"action_items": [{"bad_field": "invalid"}]})
+    monkeypatch.setattr(ext, "_call_gemini", lambda prompt, schema: {"action_items": [{"bad_field": "invalid"}]})
 
     result = ext._extract_action_items("발화록 텍스트", "2026-06-01")
 
@@ -119,7 +119,7 @@ def test_retry_succeeds_on_second_attempt(monkeypatch):
 
     call_count = {"n": 0}
 
-    def mock_gemini(_):
+    def mock_gemini(prompt, schema):
         call_count["n"] += 1
         if call_count["n"] == 1:
             return {"action_items": [{"bad": "schema"}]}
