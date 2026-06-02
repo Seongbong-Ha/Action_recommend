@@ -3,6 +3,8 @@
 모비데이즈 AI Tech Lab 사전과제 제출물입니다.  
 회의 transcript 분석 → 액션아이템 자동 추출 및 검증 → 분석 대시보드 및 Slack 알림까지 이어지는 **End-to-End 데이터·AI 파이프라인**을 구축했습니다.
 
+**빠른 확인 경로**: `make setup`으로 환경을 준비한 뒤 `make run`으로 파이프라인을 실행하고, `make dashboard`로 결과를 확인합니다. `python`/`dbt` 명령을 찾지 못하는 환경에서는 먼저 `source .venv/bin/activate`를 실행하세요.
+
 > [!IMPORTANT]
 > **핵심 설계 철학 (Core Engineering Philosophies)**
 > 1. **비용보다 리스크 우선 (Risk over Cost)**: 단순 회의록 정리 시간 단축보다 **액션아이템 누락 차단(리스크 해결)**을 최우선 목표로 둡니다. 흐릿하게 결정된 안건을 임의로 폐기하거나 환각으로 채우는 대신 `is_ambiguous=TRUE` 플래그 및 `assignee=NULL` 형태로 보존하여 인간 검수 큐로 보내는 **명시적 Null 설계**를 구축했습니다.
@@ -43,8 +45,8 @@
         ↓ Meeting 객체화 (화자 이름 보정 적용)
   → ① ingest.py          raw_meetings / raw_utterances (Postgres 무가공 적재)
   → ② dbt staging        stg_utterances (화자 직급 정규화, 잡음 발화 및 중복 제거)
-  → ③ extract.py + LLM   action_items_raw / raw_minutes (pydantic 적재 전 검증 + 3회 재시도)
-  → ④ dbt marts + test   mart_action_items / mart_minutes (비정규화 마트 생성 + dbt test 16개 검증)
+  → ③ extract.py + LLM   raw_action_items / raw_minutes (pydantic 적재 전 검증 + 3회 재시도)
+  → ④ dbt marts + test   mart_action_items / mart_minutes (비정규화 마트 생성 + dbt test 20개 검증)
   → ⑤ Streamlit          대시보드 시각화 / Slack Incoming Webhook (Block Kit 페이로드 전송)
 ```
 
@@ -87,6 +89,10 @@ Action_recommend/
 ### 1. 사전 준비 (설정 구축)
 
 ```bash
+# 가상환경 생성 및 활성화
+python3 -m venv .venv
+source .venv/bin/activate
+
 # 환경 변수 복사 및 필수 설정 정보(GEMINI_API_KEY 등) 기입
 cp .env.example .env
 
@@ -106,9 +112,12 @@ make demo
 
 *   **개별 제어 스크립트**:
     *   `make run`: 전체 ETL 데이터 파이프라인 순차 구동 및 동기화.
-    *   `make test`: 16개의 dbt 데이터 품질 및 무결성 테스트 동작.
-    *   `make test-unit`: Pydantic 및 재시도-폴백 로직 유효성 단위 테스트 10개 구동.
+    *   `make test`: 20개의 dbt 데이터 품질 및 무결성 테스트 동작.
+    *   `make test-unit`: Pydantic 및 재시도-폴백 로직 유효성 단위 테스트 12개 구동.
     *   `make dashboard`: Streamlit 대시보드 웹 구동.
+
+> [!TIP]
+> `python` 또는 `dbt` 명령을 찾지 못하는 환경에서는 가상환경을 활성화한 뒤 실행하세요. 비활성 셸에서 검증할 경우 `PATH=.venv/bin:$PATH make run`처럼 `.venv/bin`을 PATH 앞에 붙여도 동일하게 동작합니다.
 
 ---
 
@@ -138,10 +147,10 @@ Streamlit 대시보드는 단순 데이터 열람을 넘어 **"지금 당장 누
 | 위젯 | 구현 근거 |
 |---|---|
 | **상태 요약 메트릭** (전체 / Open / Done / Blocked / **기한 초과**) | 랜딩 즉시 전체 현황을 숫자로 파악. 기한 초과 카운트를 별도 강조해 즉각 액션이 필요한 규모를 명시 |
-| **회의·액션아이템 발생 추이** | 날짜별 액션아이템 생성 건수 추이로 회의 주기와 업무량 증감 패턴을 파악, 운영 로드 관리 근거로 활용 |
+| **회의·액션아이템 발생 추이** | 현재 PoC는 `meeting_date` 기준 날짜별 액션아이템 생성 건수를 표시합니다. 다중 회의 적재 시 주차 단위 집계로 확장 가능한 구조입니다. |
 | **담당자별 미완료 Top N** | 특정 인원에 업무가 편중되는 현상을 조기 감지하여 선제적 R&R 재배분을 유도. 광고 운영 조직에서 특정 AE에 미완료가 집중되면 캠페인 지연 리스크가 직결됨 |
 | **캠페인별 미완료 건수** | LLM이 발화에서 추출한 `related_campaign` 필드를 기준으로 집계. 특정 캠페인(구글 SA, 카카오 DA 등)에 미완료가 집중될 경우 해당 광고주 대응이 늦어지는 리스크를 가시화 |
-| **캠페인별 반복 이슈 키워드** | `related_campaign` 기준으로 BoW 키워드를 집계하여 동일 캠페인에서 반복적으로 등장하는 문제 패턴(소재, 예산, 검수 등)을 탐지. 구조적 원인 파악에 활용 |
+| **캠페인별 반복 이슈 키워드** | `related_campaign` 기준으로 BoW 키워드를 집계하여 동일 캠페인에서 반복적으로 등장하는 문제 패턴(소재, 예산, 검수 등)을 탐지. 광고주 차원 분석은 광고주 식별 컬럼 추가 시 같은 집계 방식으로 확장 가능 |
 | **LLM 신뢰도 분포 + 저신뢰도 드릴다운** | confidence 히스토그램으로 LLM 추출 품질을 모니터링. `confidence < 0.7` 항목을 드릴다운 테이블로 노출해 human-in-the-loop 검수 큐 역할을 수행 |
 | **기한 초과 현황** | `status=open` 이고 `due_date < 오늘`인 항목을 경고와 함께 테이블로 표시. 누락 위험이 가장 높은 항목을 우선순위화하여 운영자 즉각 대응 유도 |
 
@@ -149,8 +158,9 @@ Streamlit 대시보드는 단순 데이터 열람을 넘어 **"지금 당장 누
 
 ## 📈 검증 완료 내역
 
-*   **dbt 데이터 품질 테스트**: `make test` 구동 시 stg_utterances, mart_action_items, mart_minutes의 무결성 테스트 **16/16 PASS**.
-*   **LLM 신뢰화 단위 테스트**: `make test-unit` 구동 시 Pydantic 경계값, nullability 보존, `related_campaign` 필드 검증, 3회 시도 실패 시 강제 폴백 및 2회차 성공 조기 차단 등 **12/12 PASS**.
+*   **통합 파이프라인**: `PATH=.venv/bin:$PATH make run` 구동 시 DB 초기화 → ingest → dbt staging → LLM extract → dbt marts 전체 흐름 완료.
+*   **dbt 데이터 품질 테스트**: `PATH=.venv/bin:$PATH make test` 구동 시 stg_utterances, stg_action_items, mart_action_items, mart_minutes의 무결성 테스트 **20/20 PASS**.
+*   **LLM 신뢰화 단위 테스트**: `PATH=.venv/bin:$PATH make test-unit` 구동 시 Pydantic 경계값, nullability 보존, `related_campaign` 필드 검증, 3회 시도 실패 시 강제 폴백 및 2회차 성공 조기 차단 등 **12/12 PASS**.
 
 > [!NOTE]
 > **의존성 호환성 참고**: dbt-core 1.7.x는 `protobuf<5.0.0`을 요구합니다. `requirements.txt`에 버전 핀이 명시되어 있으므로 `make setup` 실행 시 자동으로 올바른 버전이 설치됩니다.
@@ -161,4 +171,4 @@ Streamlit 대시보드는 단순 데이터 열람을 넘어 **"지금 당장 누
 
 *   **STT 대체 경로**: 외부 SaaS로 음성 유출이 금지된 보안 원칙을 완벽히 방어하고자, GUI에서 업로드된 음성은 로컬 내에서 WhisperX를 이용해 전 처리됩니다.
 *   **Real 모드 멱등성 한계**: mock 모드는 완전한 멱등성을 보장하나, real 모드에서 LLM이 동일 발화를 다르게 파싱할 경우 중복이 생길 수 있음을 인지하고 있습니다. 실 환경에서는 `source_utterance_id` 기준의 DB unique 제약조건 고도화를 대안으로 고려하고 있으며 PoC 한계로 이를 README에 기재했습니다.
-*   **단일 회의 한계**: 현재 PoC는 1건 회의 기준으로 기동되지만, 데이터 아키텍처는 다중 회의 적재 시 주차별 추이 및 빈도 분석 차트가 즉각 반응하도록 모델링을 확장 완료했습니다.
+*   **단일 회의 한계**: 현재 PoC는 1건 회의 기준으로 기동되며 대시보드는 날짜별 추이를 표시합니다. 다중 회의 적재 후 주차별 집계 컬럼을 추가하면 주간 운영 추이 분석으로 확장 가능합니다.
