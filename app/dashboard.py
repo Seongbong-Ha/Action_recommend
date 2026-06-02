@@ -44,6 +44,7 @@ def _get_conn():
 
 @st.cache_data(ttl=60)
 def load_action_items() -> pd.DataFrame:
+    conn = None
     try:
         conn = _get_conn()
         with conn.cursor() as cur:
@@ -54,15 +55,18 @@ def load_action_items() -> pd.DataFrame:
                 "FROM mart_action_items ORDER BY extracted_at DESC"
             )
             rows = cur.fetchall()
-        conn.close()
         return pd.DataFrame([dict(r) for r in rows])
     except Exception as e:
         st.error(f"mart_action_items 로딩 실패: {e}")
         return pd.DataFrame()
+    finally:
+        if conn:
+            conn.close()
 
 
 @st.cache_data(ttl=60)
 def load_minutes() -> pd.DataFrame:
+    conn = None
     try:
         conn = _get_conn()
         with conn.cursor() as cur:
@@ -71,11 +75,13 @@ def load_minutes() -> pd.DataFrame:
                 "FROM mart_minutes ORDER BY meeting_date DESC"
             )
             rows = cur.fetchall()
-        conn.close()
         return pd.DataFrame([dict(r) for r in rows])
     except Exception as e:
         st.error(f"mart_minutes 로딩 실패: {e}")
         return pd.DataFrame()
+    finally:
+        if conn:
+            conn.close()
 
 
 # ---------------------------------------------------------------------------
@@ -141,6 +147,8 @@ def _dbt_run(select: str) -> bool:
          "--profiles-dir", "dbt_project", "--select", select],
         capture_output=True, text=True, cwd=PROJECT_ROOT,
     )
+    if result.returncode != 0:
+        st.error(f"dbt 실패 ({select}):\n```\n{result.stderr}\n```")
     return result.returncode == 0
 
 
@@ -385,6 +393,8 @@ with st.sidebar:
             except Exception as e:
                 st.error(f"파일 처리 오류: {e}")
                 st.session_state.pop("pending_meeting", None)
+            finally:
+                Path(tmp_path).unlink(missing_ok=True)
 
         meeting = st.session_state.get("pending_meeting")
         if meeting:

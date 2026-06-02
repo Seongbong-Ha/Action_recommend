@@ -126,6 +126,17 @@
   ⑥ `due_is_inferred` 미활용 — AI가 레이블만 있고 다음 행동이 없다고 지적. **지원자 판단**: LLM이 상대 표현을 절대 날짜로 변환하는 방향이 근본 개선임을 확인.
 * **산출물**: `CONTEXT.md` (도메인 용어 8종), `docs/adr/0001` (PostgreSQL 선택 ADR), `raw_action_items` 명명 통일.
 
+### 💡 사례 14 — 시니어 개발자 관점 코드 리뷰 후 추가 품질 개선
+* **AI 리뷰 수행 항목**: 명세서 준수·기능 정확성·코드 품질·성능·보안 5개 축으로 코드 전체를 재검토. 79/100점 진단 및 주요 버그 5건 도출.
+* **AI가 발견·수정한 사항**:
+  ① `dashboard.py` `NamedTemporaryFile(delete=False)` 후 `finally` 블록 없음 → 음성 파일이 `/tmp`에 무한 누적(보안 제약 위반) → **`finally: Path(tmp_path).unlink(missing_ok=True)` 추가**;
+  ② `load_action_items()` / `load_minutes()`에서 예외 시 `conn.close()` 미호출 → DB 커넥션 누수 → **`conn = None` 초기화 + `finally: if conn: conn.close()` 패턴으로 수정**;
+  ③ `_dbt_run()` 실패 시 `stderr` 무시 → UI에서 원인 파악 불가 → **`st.error(result.stderr)` 노출 추가**;
+  ④ `mart_action_items.sql`이 `raw_action_items`를 `source()`로 직접 참조 → raw → mart 직결로 dbt 설계 원칙 위반 → **`stg_action_items.sql` 신규 추가, mart에서 `ref('stg_action_items')`로 변경**;
+  ⑤ `_call_gemini()` 내부에 `import genai` + `genai.configure()` 위치 → 매 호출마다 전역 상태 재설정 → **모듈 상단으로 이동, `if GEMINI_API_KEY` 조건부 초기화**.
+* **직접 개입 판단**: 5건 모두 AI 리뷰·수정 승인. `pytest 12/12 PASS` + `dbt compile` 4모델 정상 파싱으로 회귀 없음 확인.
+* **수정 이유**: ①②는 장시간 운영 시 리소스 누수가 발생하는 실질적 장애 원인이고, ③은 운영 중 디버깅을 원천 차단하는 구조이며, ④는 dbt lineage 단절로 데이터 품질 추적을 어렵게 만들기 때문입니다.
+
 ---
 
 ## 5. AI 도움 없이 전적으로 지원자가 직접 설계한 철학적 영역

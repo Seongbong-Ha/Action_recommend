@@ -5,11 +5,15 @@ from datetime import date, datetime, timezone
 from difflib import SequenceMatcher
 from typing import Optional
 
+import google.generativeai as genai
 from pydantic import BaseModel, Field, field_validator
 
 from src.config import GEMINI_API_KEY, LLM_MODE
 from src.database import get_cursor
 from src.transcriber import FileTranscriber
+
+if GEMINI_API_KEY:
+    genai.configure(api_key=GEMINI_API_KEY)
 
 # ---------------------------------------------------------------------------
 # Pydantic 스키마
@@ -346,8 +350,6 @@ _MINUTES_SCHEMA = {
 # ---------------------------------------------------------------------------
 
 def _call_gemini(prompt: str, schema: dict) -> dict:
-    import google.generativeai as genai
-    genai.configure(api_key=GEMINI_API_KEY)
     model = genai.GenerativeModel(
         model_name="gemini-2.5-flash",
         generation_config=genai.GenerationConfig(

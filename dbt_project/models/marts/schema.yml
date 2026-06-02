@@ -4,7 +4,6 @@ sources:
   - name: public
     schema: public
     tables:
-      - name: raw_action_items
       - name: raw_meetings
       - name: raw_minutes
 
