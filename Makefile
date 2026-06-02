@@ -1,4 +1,4 @@
-.PHONY: setup run test test-unit evaluate reset-data dashboard demo all
+.PHONY: setup run seed test test-unit evaluate reset-data dashboard demo all
 
 ifneq (,$(wildcard .env))
   include .env
@@ -29,6 +29,10 @@ test-unit:
 
 evaluate:
 	$(PYTHON) -m src.evaluate
+
+seed:
+	$(PYTHON) -m src.seed
+	$(DBT) run --project-dir dbt_project --profiles-dir dbt_project --select staging marts
 
 reset-data:
 	$(PYTHON) -c "from src.database import reset_db; reset_db()"

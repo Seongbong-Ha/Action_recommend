@@ -6,6 +6,9 @@ from src.config import DATABASE_URL
 
 DDL_STATEMENTS = [
     """
+    CREATE EXTENSION IF NOT EXISTS vector
+    """,
+    """
     CREATE TABLE IF NOT EXISTS raw_meetings (
         meeting_id      VARCHAR PRIMARY KEY,
         title           VARCHAR NOT NULL,
@@ -57,8 +60,17 @@ DDL_STATEMENTS = [
         meeting_id      VARCHAR PRIMARY KEY,
         summary         TEXT NOT NULL,
         decisions       JSONB,
+        embedding       vector(768),
         extracted_at    TIMESTAMP DEFAULT NOW()
     )
+    """,
+    """
+    ALTER TABLE raw_minutes
+        ADD COLUMN IF NOT EXISTS embedding vector(768)
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_raw_minutes_embedding
+        ON raw_minutes USING hnsw (embedding vector_cosine_ops)
     """,
 ]
 

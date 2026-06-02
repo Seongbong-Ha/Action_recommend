@@ -1,6 +1,6 @@
 services:
   postgres:
-    image: postgres:15
+    image: pgvector/pgvector:pg15
     container_name: action_recommend_db
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-action_recommend}

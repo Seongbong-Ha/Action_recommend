@@ -17,9 +17,9 @@ sys.path.insert(0, str(PROJECT_ROOT))
 import requests
 
 from src.action_items import update_action_item_status
-from src.config import DATABASE_URL, SLACK_WEBHOOK_URL
+from src.config import DATABASE_URL, LLM_MODE, SLACK_WEBHOOK_URL
 from src.database import reset_db
-from src.extract import extract_from_meeting
+from src.extract import _embed_text, extract_from_meeting
 from src.ingest import ingest_meeting
 from src.transcriber import AUDIO_EXTENSIONS, FileTranscriber, WhisperTranscriber
 
@@ -90,6 +90,37 @@ def load_minutes() -> pd.DataFrame:
 # ---------------------------------------------------------------------------
 # 키워드 추출 (BoW)
 # ---------------------------------------------------------------------------
+
+def load_similar_decisions(query: str, top_k: int = 5) -> pd.DataFrame:
+    embedding = _embed_text(query)
+    if embedding is None:
+        return pd.DataFrame()
+    conn = None
+    try:
+        conn = _get_conn()
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT m.meeting_id, m.meeting_title, m.meeting_date,
+                       m.summary, m.decisions,
+                       (rm.embedding <=> %s::vector) AS distance
+                FROM mart_minutes m
+                JOIN raw_minutes rm USING (meeting_id)
+                WHERE rm.embedding IS NOT NULL
+                ORDER BY distance
+                LIMIT %s
+                """,
+                (str(embedding), top_k),
+            )
+            rows = cur.fetchall()
+        return pd.DataFrame([dict(r) for r in rows])
+    except Exception as e:
+        st.error(f"유사 의사결정 검색 실패: {e}")
+        return pd.DataFrame()
+    finally:
+        if conn:
+            conn.close()
+
 
 def _extract_keywords(texts: list, top_n: int = TOP_N_KEYWORDS) -> dict:
     counter = Counter()
@@ -450,6 +481,40 @@ if not df.empty:
                     decisions = json.loads(decisions)
                 for d in decisions:
                     st.markdown(f"- {d}")
+
+    # ---------------------------------------------------------------------------
+    # 섹션 9: 유사 의사결정 검색
+    # ---------------------------------------------------------------------------
+
+    st.subheader("유사 의사결정 검색")
+    if LLM_MODE == "mock":
+        st.caption("mock 모드: 키워드 기반 토픽 임베딩으로 동작합니다. (`make seed` 데이터 필요)")
+    search_query = st.text_input(
+        "검색어 (예: 예산 증액, 소재 검수, 온보딩)",
+        placeholder="지난 회의에서 비슷하게 결정된 내용을 검색합니다",
+    )
+    if st.button("검색", key="similar_search"):
+        if not search_query.strip():
+            st.warning("검색어를 입력하세요.")
+        else:
+            with st.spinner("임베딩 생성 중..."):
+                similar_df = load_similar_decisions(search_query.strip())
+            if similar_df.empty:
+                st.info("유사한 의사결정이 없습니다. `make seed`로 시드 데이터를 먼저 적재하세요.")
+            else:
+                for _, row in similar_df.iterrows():
+                    similarity = 1 - float(row["distance"])
+                    label = row.get("meeting_title") or row["meeting_id"]
+                    with st.expander(
+                        f"{label} ({row.get('meeting_date', '')})  —  유사도 {similarity:.2f}",
+                        expanded=True,
+                    ):
+                        st.markdown(f"**요약**: {row['summary']}")
+                        decisions = row["decisions"]
+                        if isinstance(decisions, str):
+                            decisions = json.loads(decisions)
+                        for d in decisions:
+                            st.markdown(f"- {d}")
 
 # ---------------------------------------------------------------------------
 # 사이드바: 회의 업로드

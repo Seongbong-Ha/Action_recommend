@@ -537,22 +537,43 @@ def _upsert_action_items(meeting_id: str, items: list[ActionItemSchema], utteran
     print(f"  액션아이템 upsert 완료: {len(items)}건")
 
 
+def _embed_text(text: str) -> list[float] | None:
+    if LLM_MODE == "mock":
+        from src.embeddings import mock_embed
+        return mock_embed(text)
+    try:
+        result = genai.embed_content(
+            model="models/embedding-001",
+            content=text,
+            task_type="RETRIEVAL_DOCUMENT",
+        )
+        return result["embedding"]
+    except Exception as e:
+        print(f"  임베딩 생성 실패 (무시): {e}")
+        return None
+
+
 def _upsert_minutes(meeting_id: str, minutes: MinutesSummarySchema) -> None:
     now = datetime.now(timezone.utc)
+    embed_text = minutes.summary + "\n" + "\n".join(minutes.decisions)
+    embedding = _embed_text(embed_text)
+
     with get_cursor(commit=True) as cur:
         cur.execute(
             """
-            INSERT INTO raw_minutes (meeting_id, summary, decisions, extracted_at)
-            VALUES (%s, %s, %s, %s)
+            INSERT INTO raw_minutes (meeting_id, summary, decisions, embedding, extracted_at)
+            VALUES (%s, %s, %s, %s::vector, %s)
             ON CONFLICT (meeting_id) DO UPDATE SET
                 summary      = EXCLUDED.summary,
                 decisions    = EXCLUDED.decisions,
+                embedding    = COALESCE(EXCLUDED.embedding, raw_minutes.embedding),
                 extracted_at = EXCLUDED.extracted_at
             """,
             (
                 meeting_id,
                 minutes.summary,
                 json.dumps(minutes.decisions, ensure_ascii=False),
+                str(embedding) if embedding is not None else None,
                 now,
             ),
         )
