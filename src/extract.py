@@ -2,6 +2,7 @@ import hashlib
 import json
 import re
 from datetime import date, datetime, timezone
+from difflib import SequenceMatcher
 from typing import Optional
 
 from pydantic import BaseModel, Field, field_validator
@@ -44,34 +45,37 @@ def _hash(text: str) -> str:
 
 
 def _normalize_content(content: str) -> str:
+    # ID 생성용: 공백을 단일 스페이스로 정규화 (구글 SA ≠ 구글SA 유지)
     return re.sub(r"\s+", " ", content.strip()).lower()
+
+
+def _normalize_for_match(s: str) -> str:
+    # 매칭용: 공백 전체 제거 (표기 차이 무시)
+    return re.sub(r"\s+", "", s.strip().lower())
 
 
 def _match_utterance_id(source_quote: str, utterances: list[dict]) -> Optional[str]:
     """source_quote와 utterance content를 매칭하여 utterance_id 반환.
     1차: 원문 substring 매칭, 2차: 정규화 substring 매칭, 3차: difflib 유사도 0.6 이상 최고 점수."""
-    from difflib import SequenceMatcher
+    if not source_quote:
+        return None
 
-    def _norm(s: str) -> str:
-        return re.sub(r"\s+", "", s.strip().lower())
+    norm_quote = _normalize_for_match(source_quote)
 
-    norm_quote = _norm(source_quote)
-
-    # 1차: 원문 substring
+    # 1차: 원문 substring (quote가 발화에 포함되는 방향만 허용)
     for utt in utterances:
-        if source_quote in utt["content"] or utt["content"] in source_quote:
+        if source_quote in utt["content"]:
             return utt["utterance_id"]
 
-    # 2차: 정규화 substring
+    # 2차: 정규화 substring (quote가 발화에 포함되는 방향만 허용)
     for utt in utterances:
-        nc = _norm(utt["content"])
-        if norm_quote in nc or nc in norm_quote:
+        if norm_quote in _normalize_for_match(utt["content"]):
             return utt["utterance_id"]
 
     # 3차: 유사도 기반 fallback (0.6 임계값)
     best_id, best_score = None, 0.0
     for utt in utterances:
-        score = SequenceMatcher(None, norm_quote, _norm(utt["content"])).ratio()
+        score = SequenceMatcher(None, norm_quote, _normalize_for_match(utt["content"])).ratio()
         if score > best_score:
             best_score, best_id = score, utt["utterance_id"]
     return best_id if best_score >= 0.6 else None
@@ -352,7 +356,10 @@ def _call_gemini(prompt: str, schema: dict) -> dict:
         ),
     )
     response = model.generate_content(prompt)
-    return json.loads(response.text)
+    text = response.text
+    if not text:
+        raise ValueError(f"Gemini 응답이 비어 있습니다. finish_reason={response.candidates[0].finish_reason if response.candidates else 'unknown'}")
+    return json.loads(text)
 
 
 # ---------------------------------------------------------------------------
@@ -426,7 +433,7 @@ def _upsert_action_items(meeting_id: str, items: list[ActionItemSchema], utteran
                     due_date            = EXCLUDED.due_date,
                     due_is_inferred     = EXCLUDED.due_is_inferred,
                     confidence          = EXCLUDED.confidence,
-                    source_utterance_id = EXCLUDED.source_utterance_id,
+                    source_utterance_id = COALESCE(EXCLUDED.source_utterance_id, action_items_raw.source_utterance_id),
                     source_quote        = EXCLUDED.source_quote,
                     is_ambiguous        = EXCLUDED.is_ambiguous,
                     related_campaign    = EXCLUDED.related_campaign,

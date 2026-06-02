@@ -31,7 +31,7 @@ deduped AS (
         timestamp,
         ingested_at
     FROM normalized
-    ORDER BY meeting_id, speaker, content, timestamp ASC
+    ORDER BY meeting_id, speaker, content, timestamp ASC NULLS LAST
 )
 
 SELECT * FROM deduped
