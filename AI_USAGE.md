@@ -69,6 +69,11 @@
 * **직접 수정**: ① 직무 맥락 기반 암묵적 담당자 추론, ② 단순 수긍 필터링(빈 배열 반환), ③ 상대적 기한 + `related_campaign` 추출 케이스를 직접 시나리오 설계하여 few-shot을 4종으로 확장했습니다.
 * **수정 이유**: 광고 대행사 운영 회의에서 "제가 DA 성과 분석 담당이니까"처럼 직무 맥락으로 R&R이 암묵적으로 결정되는 패턴이 빈번함을 알고 있었습니다. 이 케이스를 few-shot 없이 LLM에 위임하면 할루시네이션으로 잘못된 assignee가 배정되거나 누락될 위험이 있어 직접 설계를 지시했습니다.
 
+### 💡 사례 10 — Gemini `response_schema` 적용: 모델 레벨 JSON 스키마 강제
+* **AI 초안 검토**: `GenerationConfig`에 `response_mime_type="application/json"`만 사용하고 JSON 구조는 프롬프트 텍스트로만 명시했습니다. 이 방식은 LLM이 프롬프트를 따르지 않아 스키마가 무너질 경우 Pydantic 레이어까지 오류가 도달하는 단일 방어 구조였습니다.
+* **직접 수정 지시**: 구조화 출력 보장을 프롬프트 의존에서 모델 레벨로 격상하도록 지시했습니다. `_ACTION_ITEMS_SCHEMA`와 `_MINUTES_SCHEMA`를 Gemini API Schema 형식(OpenAPI-like dict)으로 직접 정의하고 `response_schema` 파라미터로 주입하는 방식을 채택했습니다.
+* **수정 이유**: Pydantic `model_json_schema()`는 `$defs`/`$ref`를 생성하여 Gemini API가 파싱하지 못하는 구조여서 dict 직접 정의가 불가피했습니다. 이 변경으로 모델 생성 단계(1차)와 Pydantic 파싱 단계(2차)가 독립적으로 작동하는 진정한 2중 방어 구조가 완성되었습니다.
+
 ### 💡 사례 9 — 대시보드 위젯 설계: 운영 관점 재정의
 * **AI 초안**: 기본 위젯(추이·담당자별 Top N·confidence 분포)을 동일한 비중으로 나열했습니다.
 * **직접 수정**: "지금 당장 누가 무엇을 해야 하는가"를 즉시 판단하는 운영 관점에서 **기한 초과 현황** 및 **캠페인별 미완료 건수** 위젯을 신설하고, 캠페인별 키워드 분석의 그룹핑 기준을 `meeting_title`에서 `related_campaign`으로 전환하도록 지시했습니다.
@@ -88,6 +93,7 @@
 | **선택 가산점 연동**<br>*(WhisperX / Slack)* | - WhisperX 오디오 STT + pyannote diarization 연동 뼈대 코드 구현 | - **WhisperX 3.8.6 CLI 버그 패치**: pyannote 인증 관련 토큰 누락 디버깅<br>- **Slack Webhook 실제 전송 UI 연동**: 전송 결과 피드백 바인딩 |
 | **M4. LLM 추출 강화**<br>*(extract.py / database.py / dbt)* | - Few-shot 예시 4종 작성 (R&R 핑퐁·암묵적 담당자·단순 수긍 필터링·상대적 기한)<br>- `related_campaign` 필드 스키마·DDL·upsert·dbt mart 전 계층 반영<br>- Slack 페이로드에 confidence 레벨(🟢/🔴) 및 캠페인 정보 표시 추가 | - **암묵적 R&R 지침 설계**: 직무 맥락 기반 담당자 추론 규칙을 `_NOISE_INSTRUCTIONS`에 명문화 — AI 초안은 명시적 R&R만 처리했으나 한국 광고 조직 회의에서 직무 기반 암묵적 R&R이 빈번함을 인지하고 지침 보완을 직접 지시<br>- **related_campaign null 정책 강제**: 캠페인 미언급 시 강제 추측 금지 원칙을 few-shot 및 지침에 명시 — 없는 캠페인을 억지로 채우면 그룹핑 왜곡이 생김을 판단하여 추가 |
 | **M5. 대시보드 위젯 확장**<br>*(app/dashboard.py)* | - 캠페인별 미완료 건수 bar chart (related_campaign 기준)<br>- 기한 초과 현황 경고 + 드릴다운 테이블<br>- 캠페인별 반복 이슈 키워드 분석을 meeting_title → related_campaign 기준으로 전환<br>- 메트릭 행에 기한 초과 카운트 추가 | - **위젯 선정 기준 설계**: 단순 조회 화면이 아니라 "지금 당장 누가 무엇을 해야 하는가"를 즉시 판단할 수 있는 운영 관점의 위젯 구성을 직접 정의. 기한 초과 및 캠페인별 리스크 집중화는 광고 운영 특성상 직접 누락 차단 목적으로 선정<br>- **related_campaign 기반 그룹핑 전환 판단**: 기존 meeting_title 기반 키워드 분석은 회의 단위로 묶여 캠페인 반복 패턴을 감지하지 못하는 한계를 직접 인지하고, LLM이 추출한 related_campaign 필드로 전환을 지시 |
+| **M6. LLM 구조화 출력 강화**<br>*(src/extract.py / tests/)* | - `_ACTION_ITEMS_SCHEMA` / `_MINUTES_SCHEMA` Gemini API Schema 형식 dict 정의<br>- `_call_gemini(prompt, schema)` 시그니처 변경 및 `response_schema` 파라미터 적용<br>- 테스트 mock 함수 시그니처 `(prompt, schema)` 동기화 | - **보완 시점 판단**: AI가 코드 리뷰 과정에서 `response_mime_type`만으로는 스키마 강제력이 프롬프트 의존에 머문다는 점을 지적하였고, `response_schema` 적용을 직접 승인·지시<br>- **dict 직접 정의 판단**: Pydantic `model_json_schema()`가 `$defs` 구조를 생성해 Gemini API가 파싱 불가임을 확인하고, OpenAPI-like dict로 직접 정의하는 방식을 채택하도록 결정 |
 
 ---
 
