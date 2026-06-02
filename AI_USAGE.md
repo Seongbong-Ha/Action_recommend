@@ -97,6 +97,37 @@
 
 ---
 
+### 💡 사례 11 — 코드베이스 시니어 리뷰 후 품질 개선 (Phase 2 리팩토링)
+* **AI 리뷰 수행 항목**: ① `protobuf==6.33.6`이 dbt 1.7.x와 비호환(MessageToJson 인자 제거)되어 `make run`이 dbt marts 단계에서 항상 중단되는 버그 발견 → `requirements.txt`에 `protobuf>=4.0.0,<5.0.0` 핀 추가; ② `ingest.py`의 `_utterance_id`가 `timestamp=None`일 때 `"None"` 문자열을 해시에 포함시키는 버그 → 빈 문자열로 정규화; ③ `_match_utterance_id`가 LLM이 발화를 재표현하면 NULL을 반환하는 문제 → 정규화(소문자·공백 제거) 2차 매칭 및 difflib 유사도 0.6 기반 fallback 추가; ④ mock의 confidence 값이 0.82~0.95에 몰려 드릴다운 위젯이 "저신뢰도 항목 없음"만 표시되는 문제 → confidence=0.42 테스트 케이스 1건 추가; ⑤ few-shot에 "지시형 발화(팀장이 제3자에게 업무 지시)" 패턴이 없어 LLM이 이를 처리하지 못할 수 있는 문제 → 예시 5 추가; ⑥ `extract.py` `_load_stg_utterances`의 `ORDER BY timestamp`에 `NULLS LAST` 명시적 추가.
+* **직접 개입 판단**: protobuf 버전 다운그레이드 후 google-generativeai·streamlit 호환성 확인 필요 → 패키지 임포트 테스트로 직접 검증. opentelemetry-proto dependency conflict는 streamlit 실행에 영향 없음을 확인하고 수용 판단.
+* **수정 이유**: make run이 중단되는 버그는 평가자가 파이프라인을 전혀 실행할 수 없게 하는 致命的 결함이었고, _match_utterance_id의 NULL 반환은 source_utterance_id 필드 품질을 실질적으로 저해하기 때문입니다.
+
+### 💡 사례 12 — 멀티 앵글 자동 코드 리뷰 및 버그 수정 (Phase 3 품질 개선)
+* **AI 리뷰 수행 항목**: 7개 독립 앵글(라인별 스캔·삭제 행동 감사·크로스파일 추적·재사용·단순화·효율·추상 레이어)로 후보를 병렬 수집한 뒤 검증 에이전트가 CONFIRMED/PLAUSIBLE/REFUTED 판정. 최종 확정 버그 6건 도출.
+* **AI가 발견·수정한 버그 6건**:
+  ① `_match_utterance_id`: `source_quote=""` 시 `"" in str`이 항상 True → 폴백 항목이 무조건 첫 번째 발화에 오귀속 → **진입부 `if not source_quote: return None` 추가**;
+  ② 역방향 substring 검사(`nc in norm_quote`, `utt["content"] in source_quote`) → 짧은 필러 발화가 긴 source_quote에 오매칭 → **단방향(`quote in content`)만 허용하도록 조건 제거**;
+  ③ `_upsert_action_items` ON CONFLICT 절이 `source_utterance_id`를 무조건 덮어씀 → 재추출 시 기존 유효 링크가 NULL로 파괴 → **`COALESCE(EXCLUDED.source_utterance_id, action_items_raw.source_utterance_id)` 적용**;
+  ④ `stg_utterances.sql` DISTINCT ON 중복제거 ORDER BY에 `NULLS LAST` 누락 → NULL timestamp 행이 실 timestamp 행보다 우선 선택 → **`ORDER BY ... timestamp ASC NULLS LAST` 수정**;
+  ⑤ `_call_gemini`에서 `json.loads(response.text)` 호출 시 `response.text`가 None이면 `TypeError`로 실패, `finish_reason` 정보 소실 → **None 조기 검사 후 `ValueError`(finish_reason 포함) 명시적 raise**;
+  ⑥ `_norm` 중첩 함수가 `_normalize_content`와 목적·방식이 달라 혼동 유발 → **`_normalize_for_match`로 모듈 레벨 승격, `difflib` import 상단 이동, 주석으로 용도 명시**.
+* **직접 개입 판단**: 6건 모두 AI 리뷰·수정 결과를 승인. 수정 후 `pytest 12/12 PASS` 및 수동 입력 케이스 4종 검증으로 회귀 없음 확인.
+* **수정 이유**: ①②는 폴백 실행 시마다 source_utterance_id가 잘못 저장되는 무결성 오염이고, ③은 재실행 시 기존 정상 데이터를 파괴하는 멱등성 위반이며, ④는 dbt 중복제거 레이어가 의도와 반대로 동작하는 결함이고, ⑤⑥은 운영 중 원인 추적을 불가능하게 만드는 침묵 실패 패턴이기 때문입니다.
+
+### 💡 사례 13 — grill-with-docs: 설계 결정 심층 검증 및 도메인 문서화
+* **사용 도구**: `grill-with-docs` — Matt Pocock이 공개한 Claude Code 커스텀 스킬 (`npx skills add mattpocock/claude-code-skills`로 설치, `.agents/skills/`에 위치). 설계·계획을 면접관처럼 질문 공세로 검증하고, 용어가 확정될 때마다 `CONTEXT.md`에 인라인 업데이트하며, ADR 기준을 충족하는 결정에 한해 `docs/adr/`에 기록하는 구조화된 설계 검토 스킬입니다.
+* **AI 수행 항목**: 8개 핵심 설계 결정을 순차 질문으로 검증. 코드베이스를 탐색하며 용어·코드 불일치를 즉시 지적하고, 결정 확정 시 `CONTEXT.md`에 인라인 반영.
+* **도출된 설계 결정 및 지원자 판단 개입 사례**:
+  ① `source_utterance_id` 연결 전략 — AI가 "LLM 직접 선택 vs Python fuzzy matching" 중 LLM 직접 선택이 더 올바른 설계임을 지적. **지원자 판단**: 초기 설계 시 LLM 출력 스키마 최소화에 집중하다 연결 책임을 후처리로 미룬 점 인정, 다음 버전 개선 방향 확정;
+  ② `confidence` 단일 값 — AI가 "무엇에 대한 신뢰도인지 정의 부재" 지적. **지원자 판단**: PoC에서 "검수 필요 여부 판단"이라는 단일 목적에 충분하다는 근거로 단순화 유지 결정;
+  ③ `status` 재추출 덮어쓰기 버그 — AI가 버그라고 지적. **지원자 판단**: 코드를 직접 확인하니 `ON CONFLICT DO UPDATE SET`에 `status`가 없어 **버그가 실제로 존재하지 않음** 반증 — AI 지적을 그대로 수용하지 않고 코드 검증으로 기각;
+  ④ `action_items_raw` 명명 불일치 — AI가 `raw_` 접두사 규칙과 불일치함을 지적. **지원자 판단**: 실수로 인정하고 즉시 `raw_action_items`로 전체 통일;
+  ⑤ `pipeline.py` 분리 제안 — AI가 파이프라인 로직을 별도 모듈로 분리하자고 제안. **지원자 판단**: 과제 PoC 규모에서 오버엔지니어링으로 기각;
+  ⑥ `due_is_inferred` 미활용 — AI가 레이블만 있고 다음 행동이 없다고 지적. **지원자 판단**: LLM이 상대 표현을 절대 날짜로 변환하는 방향이 근본 개선임을 확인.
+* **산출물**: `CONTEXT.md` (도메인 용어 8종), `docs/adr/0001` (PostgreSQL 선택 ADR), `raw_action_items` 명명 통일.
+
+---
+
 ## 5. AI 도움 없이 전적으로 지원자가 직접 설계한 철학적 영역
 
 *   **비용 vs 리스크의 가치 판단**: 회의 요약 시간 단축보다 **액션아이템 누락 차단**이 광고주 마케팅 일정을 수호하는 핵심 리스크 제어 영역임을 재정의했습니다.

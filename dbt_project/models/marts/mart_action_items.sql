@@ -1,5 +1,5 @@
 WITH action_items AS (
-    SELECT * FROM {{ source('public', 'action_items_raw') }}
+    SELECT * FROM {{ source('public', 'raw_action_items') }}
 ),
 
 meetings AS (

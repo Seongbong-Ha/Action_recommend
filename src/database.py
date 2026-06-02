@@ -28,7 +28,7 @@ DDL_STATEMENTS = [
         ON raw_utterances (meeting_id)
     """,
     """
-    CREATE TABLE IF NOT EXISTS action_items_raw (
+    CREATE TABLE IF NOT EXISTS raw_action_items (
         action_item_id      VARCHAR PRIMARY KEY,
         meeting_id          VARCHAR NOT NULL,
         content             TEXT NOT NULL,
@@ -44,11 +44,11 @@ DDL_STATEMENTS = [
     )
     """,
     """
-    CREATE INDEX IF NOT EXISTS idx_action_items_raw_meeting_id
-        ON action_items_raw (meeting_id)
+    CREATE INDEX IF NOT EXISTS idx_raw_action_items_meeting_id
+        ON raw_action_items (meeting_id)
     """,
     """
-    ALTER TABLE action_items_raw
+    ALTER TABLE raw_action_items
         ADD COLUMN IF NOT EXISTS related_campaign VARCHAR
     """,
     """
@@ -88,7 +88,7 @@ def init_db():
             for stmt in DDL_STATEMENTS:
                 cur.execute(stmt)
         conn.commit()
-        print("DB 초기화 완료: 테이블 4개 생성 (raw_meetings, raw_utterances, action_items_raw, raw_minutes)")
+        print("DB 초기화 완료: 테이블 4개 생성 (raw_meetings, raw_utterances, raw_action_items, raw_minutes)")
     except Exception as e:
         conn.rollback()
         raise RuntimeError(f"DB 초기화 실패: {e}") from e

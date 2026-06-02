@@ -1,6 +1,9 @@
 # Database
 psycopg2-binary==2.9.9
 
+# protobuf: dbt-core 1.7.x requires <5.0.0 (protobuf 5/6 dropped MessageToJson arg)
+protobuf>=4.0.0,<5.0.0
+
 # Data validation
 pydantic==2.7.1
 

@@ -257,6 +257,7 @@ if not df.empty:
     # ---------------------------------------------------------------------------
 
     st.subheader("캠페인별 반복 이슈 키워드")
+    st.caption("※ 다수 회의 적재 시 캠페인별 비교가 활성화됩니다")
     campaign_groups = df["related_campaign"].dropna().unique()
     if len(campaign_groups) == 0:
         st.info("캠페인 정보 없음 (related_campaign 미추출)")
