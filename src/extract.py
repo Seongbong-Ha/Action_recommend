@@ -422,7 +422,7 @@ def _upsert_action_items(meeting_id: str, items: list[ActionItemSchema], utteran
             source_utterance_id = _match_utterance_id(item.source_quote, utterances)
             cur.execute(
                 """
-                INSERT INTO action_items_raw
+                INSERT INTO raw_action_items
                     (action_item_id, meeting_id, content, assignee, due_date,
                      due_is_inferred, confidence, source_utterance_id, source_quote,
                      is_ambiguous, related_campaign, status, extracted_at)
@@ -433,7 +433,7 @@ def _upsert_action_items(meeting_id: str, items: list[ActionItemSchema], utteran
                     due_date            = EXCLUDED.due_date,
                     due_is_inferred     = EXCLUDED.due_is_inferred,
                     confidence          = EXCLUDED.confidence,
-                    source_utterance_id = COALESCE(EXCLUDED.source_utterance_id, action_items_raw.source_utterance_id),
+                    source_utterance_id = COALESCE(EXCLUDED.source_utterance_id, raw_action_items.source_utterance_id),
                     source_quote        = EXCLUDED.source_quote,
                     is_ambiguous        = EXCLUDED.is_ambiguous,
                     related_campaign    = EXCLUDED.related_campaign,
