@@ -17,7 +17,7 @@
 
 | 영역 | 선택 | 선정 이유 |
 |---|---|---|
-| **Database** | PostgreSQL (Docker Compose) | 사내 약 100명 사용 환경의 동시 쓰기 상황(액션아이템 상태 업데이트) 대응을 위해 MVCC 및 upsert를 지원하는 유일한 선택지. (SQLite/DuckDB 단점 극복) |
+| **Database** | PostgreSQL + pgvector (Docker Compose) | 사내 약 100명 사용 환경의 동시 쓰기 상황(액션아이템 상태 업데이트) 대응을 위해 MVCC 및 upsert를 지원하는 유일한 선택지. pgvector 확장으로 임베딩 유사 검색까지 동일 DB에서 처리. (SQLite/DuckDB 단점 극복) |
 | **Data Transformation** | dbt-core + dbt-utils | `ref()` 기반 자동 lineage 구조 제공 및 `schema.yml` 선언형 데이터 테스트를 통한 적재 후 2차 품질 보증 확보. |
 | **LLM** | Gemini API + Mock 토글 (`LLM_MODE`) | 멱등성과 무중단 검증을 위해 Mock 고정 출력을 기본값으로 보장하며, 환경변수 전환으로 무료 티어 Gemini 2.5 Flash 호출 실 PoC 가능. |
 | **Validation** | Pydantic v2 | LLM 출력의 포맷 붕괴 및 유효 한계값 이탈을 적재 전 단계에서 원천 차단. |
@@ -63,7 +63,7 @@
 | raw | `raw_meetings` | 회의 메타데이터 저장 (`meeting_id`, 제목, 날짜, 참가자) | 회의 단위 재처리·추적의 기준점. 참가자 목록은 구조 변화가 쉬워 `JSONB`로 보존 |
 | raw | `raw_utterances` | 화자별 원천 발화 저장 | STT/transcript 원본을 불변에 가깝게 보존해 LLM 추출 실패 시 재처리 가능 |
 | raw | `raw_action_items` | LLM 추출 액션아이템 저장 | `action_item_id` 해시 키와 `ON CONFLICT` upsert로 멱등성 확보. `confidence`, `source_quote`, `is_ambiguous`로 검수 가능성 보장 |
-| raw | `raw_minutes` | 회의 요약과 결정사항 저장 | 회의록 요약은 액션아이템과 생명주기가 달라 별도 테이블로 분리 |
+| raw | `raw_minutes` | 회의 요약과 결정사항 저장. `embedding vector(768)` 컬럼 포함 | 회의록 요약은 액션아이템과 생명주기가 달라 별도 테이블로 분리. pgvector HNSW 인덱스로 코사인 유사도 검색 지원 |
 | staging | `stg_utterances`, `stg_action_items` | 화자 정규화, 짧은 잡음 발화 제거, 중복 제거, raw pass-through | raw 원본을 건드리지 않고 분석 전 정제 규칙을 dbt lineage 안에서 관리 |
 | mart | `mart_action_items`, `mart_minutes` | 대시보드·Slack·평가 CLI용 최종 조회 테이블 | 회의 제목·날짜를 비정규화해 운영 화면이 단일 테이블 중심으로 빠르게 읽도록 설계 |
 
@@ -99,10 +99,12 @@ Action_recommend/
 ├── src/
 │   ├── action_items.py          # 액션아이템 status 업데이트 도메인 함수
 │   ├── config.py               # 환경 변수, DB URI, LLM_MODE 관리
-│   ├── database.py             # raw DDL 초기화 및 커넥션 풀링
+│   ├── database.py             # raw DDL 초기화 (pgvector extension, HNSW 인덱스 포함)
 │   ├── transcriber.py          # 구/신 JSON 로더 및 WhisperX STT 어댑터
 │   ├── ingest.py               # 원천 데이터 적재 및 멱등 해시 생성
 │   ├── extract.py              # LLM 추출, 3회 재시도-폴백 루프 및 Pydantic 바인딩
+│   ├── embeddings.py           # 토픽 클러스터 mock 임베딩 (예산/소재/온보딩) — real 모드는 Gemini
+│   ├── seed.py                 # 시연용 시드 데이터 적재 (4개 회의 + mock 임베딩)
 │   └── evaluate.py             # golden set 기반 추출 품질 평가 CLI
 ├── dbt_project/
 │   ├── dbt_project.yml         # dbt 프로젝트 설정
@@ -144,6 +146,7 @@ make demo
 
 *   **개별 제어 스크립트**:
     *   `make run`: 전체 ETL 데이터 파이프라인 순차 구동 및 동기화.
+    *   `make seed`: 2주 분량(4개 회의) 시연용 시드 데이터 및 토픽 임베딩 적재. DB 초기화 후 유사 검색 시연에 필요한 기준 데이터를 빠르게 복원.
     *   `make test`: 20개의 dbt 데이터 품질 및 무결성 테스트 동작.
     *   `make test-unit`: Pydantic, 재시도-폴백, status 검증, STT 화자 수·timestamp 정규화, 대표 캠페인 fallback, 평가 지표 계산 로직 단위 테스트 26개 구동.
     *   `make evaluate`: `data/golden_action_items.json` 기준 precision / recall / F1 및 필드 정확도 계산.
@@ -215,6 +218,7 @@ Streamlit 대시보드는 단순 데이터 열람을 넘어 **"지금 당장 누
 | **LLM 신뢰도 분포 + 저신뢰도 드릴다운** | confidence 히스토그램으로 LLM 추출 품질을 모니터링. `confidence < 0.7` 항목을 드릴다운 테이블로 노출해 human-in-the-loop 검수 큐 역할을 수행 |
 | **기한 초과 현황** | `status=open` 이고 `due_date < 오늘`인 항목을 경고와 함께 테이블로 표시. 누락 위험이 가장 높은 항목을 우선순위화하여 운영자 즉각 대응 유도 |
 | **액션아이템 상태 업데이트** | `st.data_editor`에서 `open/done/blocked` 상태만 수정 가능. 저장 시 `raw_action_items.status`를 업데이트하고 dbt marts를 재빌드해 대시보드와 Slack 산출물 기준을 동기화 |
+| **유사 의사결정 검색** | 검색어를 임베딩(mock: 토픽 클러스터, real: Gemini)으로 변환해 pgvector `<=>` 코사인 거리로 과거 회의 TOP-5 반환. `make seed` 시드 데이터 적재 후 mock 모드에서도 즉시 시연 가능 |
 
 ---
 
