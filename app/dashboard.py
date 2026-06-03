@@ -2,6 +2,7 @@ import json
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from collections import Counter
 from pathlib import Path
@@ -17,11 +18,35 @@ sys.path.insert(0, str(PROJECT_ROOT))
 import requests
 
 from src.action_items import update_action_item_status
-from src.config import DATABASE_URL, LLM_MODE, SLACK_WEBHOOK_URL
+from src.config import DATABASE_URL, HUGGINGFACE_TOKEN, LLM_MODE, SLACK_WEBHOOK_URL
 from src.database import reset_db
 from src.extract import _embed_text, extract_from_meeting
 from src.ingest import ingest_meeting
 from src.transcriber import AUDIO_EXTENSIONS, FileTranscriber, WhisperTranscriber
+
+_model_cache: dict = {}
+_model_lock = threading.Lock()
+
+
+def _get_whisper_model(model_size: str = "base", device: str = "cpu"):
+    key = ("whisper", model_size, device)
+    if key not in _model_cache:
+        with _model_lock:
+            if key not in _model_cache:
+                import whisperx
+                _model_cache[key] = whisperx.load_model(model_size, device, compute_type="int8")
+    return _model_cache[key]
+
+
+def _get_diarize_pipeline(token: str, device: str = "cpu"):
+    key = ("diarize", device)
+    if key not in _model_cache:
+        with _model_lock:
+            if key not in _model_cache:
+                from whisperx.diarize import DiarizationPipeline
+                _model_cache[key] = DiarizationPipeline(token=token, device=device)
+    return _model_cache[key]
+
 
 LOW_CONFIDENCE_THRESHOLD = 0.7
 TOP_N_ASSIGNEE = 5
@@ -253,6 +278,7 @@ def _save_status_updates(original_df: pd.DataFrame, edited_df: pd.DataFrame) -> 
 # ---------------------------------------------------------------------------
 
 st.set_page_config(page_title="Action Recommend Dashboard", layout="wide")
+
 st.title("회의 액션아이템 대시보드")
 
 df = load_action_items()
@@ -562,10 +588,17 @@ with st.sidebar:
                             )
                             st.write(f"{elapsed:.1f}s - {message}")
 
+                        audio_status.update(label="Whisper 모델 로드 중...", state="running")
+                        whisper_model = _get_whisper_model("base")
+                        audio_status.update(label="화자 분리 모델 로드 중...", state="running")
+                        diarize_pipeline = _get_diarize_pipeline(HUGGINGFACE_TOKEN) if HUGGINGFACE_TOKEN else None
+
                         meeting = WhisperTranscriber(
                             model_size="base",
                             expected_speaker_count=expected_speaker_count,
                             progress_callback=show_audio_progress,
+                            whisper_model=whisper_model,
+                            diarize_pipeline=diarize_pipeline,
                         ).load(tmp_path)
                         audio_elapsed = time.monotonic() - audio_started_at
                         audio_status.update(

@@ -99,6 +99,8 @@ class WhisperTranscriber(BaseTranscriber):
         device: str = "cpu",
         expected_speaker_count: Optional[int] = None,
         progress_callback: Optional[Callable[[str], None]] = None,
+        whisper_model=None,
+        diarize_pipeline=None,
     ):
         self.model_size = model_size
         self.device = device
@@ -106,6 +108,8 @@ class WhisperTranscriber(BaseTranscriber):
         self.expected_speaker_count = normalize_expected_speaker_count(
             expected_speaker_count
         )
+        self._whisper_model = whisper_model
+        self._diarize_pipeline = diarize_pipeline
 
     def _notify(self, message: str) -> None:
         print(f"[WhisperTranscriber] {message}")
@@ -131,8 +135,12 @@ class WhisperTranscriber(BaseTranscriber):
         if not path.exists():
             raise FileNotFoundError(f"음성 파일을 찾을 수 없습니다: {source}")
 
-        self._notify(f"모델 로드 중 ({self.model_size})")
-        model = whisperx.load_model(self.model_size, self.device, compute_type="int8")
+        if self._whisper_model is not None:
+            self._notify(f"Whisper 모델 준비 완료 (캐시됨: {self.model_size})")
+            model = self._whisper_model
+        else:
+            self._notify(f"모델 로드 중 ({self.model_size})")
+            model = whisperx.load_model(self.model_size, self.device, compute_type="int8")
         self._notify("오디오 로드 중")
         audio = whisperx.load_audio(str(path))
 
@@ -151,11 +159,15 @@ class WhisperTranscriber(BaseTranscriber):
             return_char_alignments=False,
         )
 
-        self._notify("화자 분리 모델 로드 중")
-        from whisperx.diarize import DiarizationPipeline
-        diarize_model = DiarizationPipeline(
-            token=HUGGINGFACE_TOKEN, device=self.device
-        )
+        if self._diarize_pipeline is not None:
+            self._notify("화자 분리 모델 준비 완료 (캐시됨)")
+            diarize_model = self._diarize_pipeline
+        else:
+            self._notify("화자 분리 모델 로드 중")
+            from whisperx.diarize import DiarizationPipeline
+            diarize_model = DiarizationPipeline(
+                token=HUGGINGFACE_TOKEN, device=self.device
+            )
         diarize_kwargs = {}
         if self.expected_speaker_count is not None:
             diarize_kwargs = {

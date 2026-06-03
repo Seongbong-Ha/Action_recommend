@@ -98,6 +98,7 @@ AI 리뷰는 단순 제안이 아니라 실제 실행·테스트로 검증했습
 | 업로드 테스트 데이터 격리 | `make dashboard`와 대시보드 파이프라인 실행 시 `reset_db()`로 기존 raw/mart 데이터를 삭제한 뒤 현재 업로드 파일만 적재 | 샘플 데이터와 mp3 테스트 결과가 섞이면 검증자가 결과 출처를 혼동할 수 있어 시연 경로를 분리 |
 | 원커맨드 제출 데모 정리 | `make demo`가 `run → test → evaluate → seed → dashboard`를 순서대로 실행하도록 Makefile과 README를 수정 | 평가 기준의 "하나의 명령어로 end-to-end 가능"에 맞춰 파이프라인, 품질 평가, 임베딩 검색 시드, 대시보드 확인을 한 번에 시연하기 위함 |
 | Gemini 모델 설정 분리 | `GEMINI_MODEL` 환경변수를 추가해 `gemini-2.5-flash`, `gemini-3.5-flash` 등 사용 가능 모델을 코드 수정 없이 전환 | API 한도나 모델 가용성 변화가 있어도 제출 직전 설정 변경만으로 real PoC를 복구할 수 있게 하기 위함 |
+| WhisperX 모델 세션 캐싱 | `dashboard.py`에 `_model_cache` + `threading.Lock` 기반 double-checked locking 캐시 추가; `WhisperTranscriber`에 `whisper_model` / `diarize_pipeline` 주입 파라미터 추가해 세션 내 재로드 방지 | 같은 Streamlit 세션에서 음성 파일을 재업로드해도 수 분짜리 모델 로드가 반복되지 않도록 최적화 |
 | DB 스키마 설명 | README에 raw, staging, mart 레이어와 핵심 필드 설계 이유 추가 | 과제 요구사항의 데이터 스키마 설계 근거를 README에서 바로 확인 가능하게 함 |
 
 `make evaluate`는 샘플 golden set 기준 precision 1.00, recall 1.00, F1 1.00으로 실행되었지만, 이 수치는 단일 회의 회귀 검증 결과입니다. 일반 성능으로 과장하지 않기 위해 README에는 4주 운영 1주차에 golden set을 5~10건으로 확장하는 계획을 함께 명시했습니다. 상태 업데이트는 `raw_action_items.status`에 저장하고, LLM 재추출 upsert가 `status`를 덮어쓰지 않는 기존 설계와 연결했습니다.
