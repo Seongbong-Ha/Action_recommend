@@ -23,6 +23,8 @@ DATABASE_URL = (
 )
 
 LLM_MODE = os.getenv("LLM_MODE", "mock")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+EMBEDDING_MODE = os.getenv("EMBEDDING_MODE", "mock")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 HUGGINGFACE_TOKEN = os.getenv("HUGGINGFACE_TOKEN", "")
 SLACK_WEBHOOK_URL = os.getenv("SLACK_WEBHOOK_URL", "")

@@ -40,7 +40,11 @@ reset-data:
 dashboard: reset-data
 	$(STREAMLIT) run app/dashboard.py
 
-demo: run
+demo:
+	$(MAKE) run
+	$(MAKE) test
+	$(MAKE) evaluate
+	$(MAKE) seed
 	$(STREAMLIT) run app/dashboard.py
 
 all: setup run test

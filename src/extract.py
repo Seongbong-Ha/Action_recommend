@@ -8,7 +8,7 @@ from typing import Optional
 import google.generativeai as genai
 from pydantic import BaseModel, Field, field_validator
 
-from src.config import GEMINI_API_KEY, LLM_MODE
+from src.config import EMBEDDING_MODE, GEMINI_API_KEY, GEMINI_MODEL, LLM_MODE
 from src.database import get_cursor
 from src.transcriber import FileTranscriber
 
@@ -418,7 +418,7 @@ _MINUTES_SCHEMA = {
 
 def _call_gemini(prompt: str, schema: dict) -> dict:
     model = genai.GenerativeModel(
-        model_name="gemini-2.5-flash",
+        model_name=GEMINI_MODEL,
         generation_config=genai.GenerationConfig(
             response_mime_type="application/json",
             response_schema=schema,
@@ -538,8 +538,9 @@ def _upsert_action_items(meeting_id: str, items: list[ActionItemSchema], utteran
 
 
 def _embed_text(text: str) -> list[float] | None:
-    if LLM_MODE == "mock":
-        from src.embeddings import mock_embed
+    from src.embeddings import mock_embed
+
+    if EMBEDDING_MODE == "mock":
         return mock_embed(text)
     try:
         result = genai.embed_content(
@@ -549,8 +550,8 @@ def _embed_text(text: str) -> list[float] | None:
         )
         return result["embedding"]
     except Exception as e:
-        print(f"  임베딩 생성 실패 (무시): {e}")
-        return None
+        print(f"  임베딩 생성 실패, mock 임베딩으로 대체: {e}")
+        return mock_embed(text)
 
 
 def _upsert_minutes(meeting_id: str, minutes: MinutesSummarySchema) -> None:

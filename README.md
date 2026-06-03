@@ -19,7 +19,8 @@
 |---|---|---|
 | **Database** | PostgreSQL + pgvector (Docker Compose) | 사내 약 100명 사용 환경의 동시 쓰기 상황(액션아이템 상태 업데이트) 대응을 위해 MVCC 및 upsert를 지원하는 유일한 선택지. pgvector 확장으로 임베딩 유사 검색까지 동일 DB에서 처리. (SQLite/DuckDB 단점 극복) |
 | **Data Transformation** | dbt-core + dbt-utils | `ref()` 기반 자동 lineage 구조 제공 및 `schema.yml` 선언형 데이터 테스트를 통한 적재 후 2차 품질 보증 확보. |
-| **LLM** | Gemini API + Mock 토글 (`LLM_MODE`) | 멱등성과 무중단 검증을 위해 Mock 고정 출력을 기본값으로 보장하며, 환경변수 전환으로 무료 티어 Gemini 2.5 Flash 호출 실 PoC 가능. |
+| **LLM** | Gemini API + Mock 토글 (`LLM_MODE`, `GEMINI_MODEL`) | 멱등성과 무중단 검증을 위해 Mock 고정 출력을 기본값으로 보장하며, 환경변수 전환으로 Gemini real 호출 PoC 가능. |
+| **Embedding Search** | pgvector + Mock/Real 토글 (`EMBEDDING_MODE`) | 시연 기본값은 seed 데이터와 같은 mock 벡터 공간을 사용해 유사 결정 검색을 안정적으로 재현. 필요 시 real 임베딩으로 전환 가능. |
 | **Validation** | Pydantic v2 | LLM 출력의 포맷 붕괴 및 유효 한계값 이탈을 적재 전 단계에서 원천 차단. |
 | **STT / Audio** | 제공 JSON 사용 (WhisperX 연동) | 원천 데이터의 외부 SaaS 유출 금지 보안 원칙 준수. `BaseTranscriber` 추상 인터페이스를 도입해 추후 로컬 Whisper 모듈 교체 비용 최소화. |
 | **Dashboard** | Streamlit | Python 단일 스택을 유지하며 코드로 풍부한 위젯·드릴다운 화면을 빠르게 구성. |
@@ -98,12 +99,12 @@ Action_recommend/
 │   └── test_evaluate_metrics.py    # precision/recall/F1 계산 로직 테스트
 ├── src/
 │   ├── action_items.py          # 액션아이템 status 업데이트 도메인 함수
-│   ├── config.py               # 환경 변수, DB URI, LLM_MODE 관리
+│   ├── config.py               # 환경 변수, DB URI, LLM_MODE, GEMINI_MODEL, EMBEDDING_MODE 관리
 │   ├── database.py             # raw DDL 초기화 (pgvector extension, HNSW 인덱스 포함)
 │   ├── transcriber.py          # 구/신 JSON 로더 및 WhisperX STT 어댑터
 │   ├── ingest.py               # 원천 데이터 적재 및 멱등 해시 생성
 │   ├── extract.py              # LLM 추출, 3회 재시도-폴백 루프 및 Pydantic 바인딩
-│   ├── embeddings.py           # 토픽 클러스터 mock 임베딩 (예산/소재/온보딩) — real 모드는 Gemini
+│   ├── embeddings.py           # 토픽 클러스터 mock 임베딩 (예산/소재/온보딩)
 │   ├── seed.py                 # 시연용 시드 데이터 적재 (4개 회의 + mock 임베딩)
 │   └── evaluate.py             # golden set 기반 추출 품질 평가 CLI
 ├── dbt_project/
@@ -140,13 +141,13 @@ make setup
 ### 2. 파이프라인 통합 데모 실행
 
 ```bash
-# 전체 파이프라인(ingest → dbt staging → extract → dbt marts)을 일괄 실행하고 대시보드를 즉시 가동합니다.
+# 제출 데모용 원커맨드: 파이프라인 실행 → dbt test → 추출 품질 평가 → 임베딩 시드 적재 → 대시보드 실행
 make demo
 ```
 
 *   **개별 제어 스크립트**:
     *   `make run`: 전체 ETL 데이터 파이프라인 순차 구동 및 동기화.
-    *   `make seed`: 2주 분량(4개 회의) 시연용 시드 데이터 및 토픽 임베딩 적재. DB 초기화 후 유사 검색 시연에 필요한 기준 데이터를 빠르게 복원.
+    *   `make seed`: 2주 분량(4개 회의) 시연용 시드 데이터 및 토픽 임베딩 적재. 유사 검색 시연에 필요한 기준 데이터를 빠르게 복원.
     *   `make test`: 20개의 dbt 데이터 품질 및 무결성 테스트 동작.
     *   `make test-unit`: Pydantic, 재시도-폴백, status 검증, STT 화자 수·timestamp 정규화, 대표 캠페인 fallback, 평가 지표 계산 로직 단위 테스트 26개 구동.
     *   `make evaluate`: `data/golden_action_items.json` 기준 precision / recall / F1 및 필드 정확도 계산.
@@ -180,7 +181,7 @@ PATH=.venv/bin:$PATH make dashboard
 
 WhisperX와 파이프라인 실행은 모두 Streamlit `st.status`로 단계별 진행 로그와 소요 시간을 표시합니다. 장시간 걸리는 구간이 있더라도 모델 로드, 음성 인식, 단어 정렬, 화자 분리, dbt 실행, LLM 추출 중 어느 단계인지 화면에서 확인할 수 있습니다.
 
-`make dashboard` 또는 대시보드에서 업로드 파일로 `파이프라인 실행`을 누르면 기존 raw/mart 데이터(`raw_meetings`, `raw_utterances`, `raw_action_items`, `raw_minutes`, `mart_action_items`, `mart_minutes`)를 먼저 비운 뒤 현재 업로드한 회의만 적재합니다. 따라서 샘플 데이터와 직접 테스트한 mp3 결과가 섞이지 않습니다. 반대로 `make run`과 `make demo`는 제출 데모 확인을 위한 `data/sample_meeting.json` 샘플 적재 경로로 남겨두었습니다.
+`make dashboard` 또는 대시보드에서 업로드 파일로 `파이프라인 실행`을 누르면 기존 raw/mart 데이터(`raw_meetings`, `raw_utterances`, `raw_action_items`, `raw_minutes`, `mart_action_items`, `mart_minutes`)를 먼저 비운 뒤 현재 업로드한 회의만 적재합니다. 따라서 샘플 데이터와 직접 테스트한 mp3 결과가 섞이지 않습니다. 반대로 `make demo`는 제출 데모 확인을 위한 `data/sample_meeting.json` 처리, dbt test, golden set 평가, 임베딩 시드 적재, 대시보드 실행을 한 번에 수행합니다.
 
 ---
 
